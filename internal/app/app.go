@@ -51,9 +51,8 @@ type messenger interface {
 	// доехала по другой причине.
 	SendBanner(ctx context.Context, chatID int64, photo models.InputFile, caption string, entities []models.MessageEntity, rm models.ReplyMarkup) (int, error)
 	Delete(ctx context.Context, chatID int64, msgID int)
-	RemoveKeyboard(ctx context.Context, chatID int64)
 
-	SetCommandKeyboard(ctx context.Context, chatID int64, label string)
+	SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string)
 	AnswerCallback(ctx context.Context, id string)
 	EditText(ctx context.Context, chatID int64, msgID int, text string, rows [][]models.InlineKeyboardButton) bool
 	EditCaption(ctx context.Context, chatID int64, msgID int, caption string, rows [][]models.InlineKeyboardButton) bool
@@ -164,7 +163,6 @@ type App struct {
 
 	scrMu         sync.Mutex
 	screen        map[int64][]int
-	kbSet         map[int64]bool
 	editTarget    map[int64]int
 	screenSection map[int64]string
 
@@ -301,7 +299,7 @@ type subCacheEntry struct {
 func New(cfg *config.Config, crypter *crypto.Crypter, log *slog.Logger) *App {
 	return &App{cfg: cfg, crypter: crypter, log: log, ctl: hostctl.New(), wiz: map[int64]*wizard{}, ui: map[int64]*uiState{},
 		bootAt: time.Now(),
-		screen: map[int64][]int{}, kbSet: map[int64]bool{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
+		screen: map[int64][]int{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
 }
 
 func (a *App) Bootstrap(ctx context.Context) error {
@@ -327,7 +325,9 @@ func (a *App) dsnForEnv(kind string) string {
 	if kind == model.DBPostgres {
 		return a.cfg.DatabaseURL
 	}
-	return filepath.Join(a.cfg.DataDir, "bot.db")
+	// ToSlash: на Windows filepath.Join даёт обратные слэши, а тест и SQLite
+	// ждут прямой («/data/bot.db»): прямые слэши SQLite понимает везде.
+	return filepath.ToSlash(filepath.Join(a.cfg.DataDir, "bot.db"))
 }
 
 func (a *App) loadConfigIfStore(ctx context.Context) error {
@@ -544,6 +544,20 @@ func (a *App) switchStore(ctx context.Context, kind, dsn string) error {
 	return storage.SaveBootstrap(a.cfg.DataDir, &storage.Bootstrap{DBKind: kind, DSN: dsn})
 }
 
+// setBotCommands — панелька «Меню» слева со списком команд бота.
+func (a *App) setBotCommands(ctx context.Context) {
+	cmds := []models.BotCommand{
+		{Command: "start", Description: "Запустить бота"},
+		{Command: "menu", Description: "Главное меню"},
+		{Command: "vpn", Description: "Подключить VPN"},
+		{Command: "ref", Description: "Пригласить друга"},
+		{Command: "info", Description: "Информация"},
+	}
+	if _, err := a.b.SetMyCommands(ctx, &bot.SetMyCommandsParams{Commands: cmds}); err != nil {
+		a.log.Warn("не удалось выставить команды меню", "err", err)
+	}
+}
+
 func (a *App) Run(ctx context.Context) error {
 	a.bgCtx = ctx
 	b, err := bot.New(a.cfg.BotToken, bot.WithDefaultHandler(a.handle))
@@ -552,6 +566,7 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	a.b = b
 	a.msg = botMessenger{b: b, log: a.log}
+	a.setBotCommands(ctx)
 	a.sendHealNotice(ctx)
 	a.prunePlanAccess(ctx)
 	a.notifyUpdated(ctx)
@@ -738,6 +753,13 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 		return
 	}
 
+	// Reply-кнопки возвращаются на каждое текстовое сообщение: клиент прячет
+	// клавиатуру штатно (тап по кнопке / встроенное сворачивание), а бот
+	// ставит её заново. На оферте ensureHomeKey сам не сработает (гейт).
+	if !isAdmin && a.installed() {
+		a.ensureHomeKey(ctx, chatID)
+	}
+
 	if strings.HasPrefix(text, "/") {
 		a.msg.Delete(ctx, chatID, m.ID)
 		// Команда уводит с экрана ввода — ожидание секрета доступа к панели
@@ -749,6 +771,9 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	if a.installed() && isHomeText(text) {
 		a.msg.Delete(ctx, chatID, m.ID)
 		a.enterHome(ctx, chatID, isAdmin, firstName, username)
+		return
+	}
+	if a.installed() && a.routeUserCommand(ctx, chatID, userCommandKey(text), isAdmin, firstName, username) {
 		return
 	}
 
@@ -802,7 +827,24 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 				return
 			}
 		}
-		a.enterHome(ctx, chatID, isAdmin, firstName, username)
+		if !isAdmin && a.store != nil {
+			// Строка пользователя должна существовать ДО проверки согласия:
+			// legalAccepted считает «нет пользователя» согласием, и без
+			// этого самый первый /start молча пропускал оферту.
+			_ = a.store.UpsertUser(ctx, chatID)
+			if username != "" || firstName != "" {
+				_ = a.store.SetUserInfo(ctx, chatID, username, firstName)
+			}
+			// Как в registerUser: разовый whitelist-ID гасится во флаг, иначе
+			// приглашённый по списку так и останется «не своим» до /menu.
+			a.reconcileWhitelist(ctx, chatID)
+		}
+		if !isAdmin && a.legalStartRequired(ctx, chatID) {
+			a.getUI(chatID).pendingLegalHome = true
+			a.askLegal(ctx, chatID)
+			return
+		}
+		a.showGreeting(ctx, chatID, displayName(firstName, username))
 		return
 	case strings.HasPrefix(text, "/status"):
 		if isAdmin {
@@ -817,6 +859,29 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	case strings.HasPrefix(text, "/buy"):
 		if a.installed() {
 			a.showPlans(ctx, chatID)
+		}
+		return
+	case strings.HasPrefix(text, "/vpn"):
+		if a.installed() {
+			a.ensureUser(ctx, chatID)
+			a.showVPN(ctx, chatID)
+		}
+		return
+	case strings.HasPrefix(text, "/menu"):
+		if a.installed() {
+			a.enterHome(ctx, chatID, isAdmin, firstName, username)
+		}
+		return
+	case strings.HasPrefix(text, "/ref"):
+		if a.installed() {
+			a.ensureUser(ctx, chatID)
+			a.showReferral(ctx, chatID)
+		}
+		return
+	case strings.HasPrefix(text, "/info"):
+		if a.installed() {
+			a.ensureUser(ctx, chatID)
+			a.showInfo(ctx, chatID)
 		}
 		return
 	case strings.HasPrefix(text, "/paysupport") || strings.HasPrefix(text, "/support"):
@@ -1654,18 +1719,83 @@ func isHomeText(text string) bool {
 	return t == i18n.T(model.LangRU, "btn.home") || t == i18n.T(model.LangEN, "btn.home")
 }
 
-func (a *App) ensureHomeKey(ctx context.Context, chatID int64) {
-	a.scrMu.Lock()
-	if a.kbSet == nil {
-		a.kbSet = map[int64]bool{}
+// userCommandKey — наш UX: команды /vpn /menu /ref /info и тексты постоянных
+// reply-кнопок снизу (на обоих языках). Возвращает vpn/menu/ref/info или "".
+func userCommandKey(text string) string {
+	t := strings.TrimSpace(text)
+	if strings.HasPrefix(t, "/") {
+		cmd := t[1:]
+		if i := strings.IndexByte(cmd, ' '); i >= 0 {
+			cmd = cmd[:i]
+		}
+		if i := strings.IndexByte(cmd, '@'); i >= 0 {
+			cmd = cmd[:i]
+		}
+		switch cmd {
+		case "vpn", "menu", "ref", "info":
+			return cmd
+		}
+		return ""
 	}
-	already := a.kbSet[chatID]
-	a.kbSet[chatID] = true
-	a.scrMu.Unlock()
-	if already {
+	for _, lang := range []string{model.LangRU, model.LangEN} {
+		switch t {
+		case i18n.T(lang, "rk.vpn"):
+			return "vpn"
+		case i18n.T(lang, "rk.menu"):
+			return "menu"
+		case i18n.T(lang, "rk.help"):
+			return "info"
+		// Старые подписи клавиатуры: клиенты держат reply-набор у себя, и
+		// кнопка из прошлой версии бота должна продолжать работать.
+		case i18n.T(lang, "rk.ref"):
+			return "ref"
+		case i18n.T(lang, "rk.info"):
+			return "info"
+		}
+	}
+	return ""
+}
+
+// routeUserCommand ведёт на экраны нашего UX. Возвращает true, если текст
+// оказался нашей командой/кнопкой и обработан.
+func (a *App) routeUserCommand(ctx context.Context, chatID int64, key string, isAdmin bool, firstName, username string) bool {
+	switch key {
+	case "":
+		return false
+	case "vpn":
+		a.ensureUser(ctx, chatID)
+		a.showVPN(ctx, chatID)
+	case "menu":
+		a.enterHome(ctx, chatID, isAdmin, firstName, username)
+	case "ref":
+		a.ensureUser(ctx, chatID)
+		a.showReferral(ctx, chatID)
+	case "info":
+		a.ensureUser(ctx, chatID)
+		a.showInfo(ctx, chatID)
+	}
+	return true
+}
+
+// ensureUser — гость с кнопки/команды попадает в базу, как при /start.
+func (a *App) ensureUser(ctx context.Context, chatID int64) {
+	if a.store == nil {
 		return
 	}
-	a.msg.SetCommandKeyboard(ctx, chatID, i18n.T(a.lang(chatID), "btn.home"))
+	if u, _ := a.store.GetUser(ctx, chatID); u == nil {
+		_ = a.store.UpsertUser(ctx, chatID)
+	}
+}
+
+// ensureHomeKey — постоянные reply-кнопки. Как в FITHOST: клавиатура обычная
+// (не persistent), клиент прячет её штатно — тапом по кнопке или встроенным
+// сворачиванием, — а мы возвращаем её на каждом текстовом сообщении. Отдельной
+// команды скрытия нет. Исключение — оферта: до согласия клавиатуры нет.
+func (a *App) ensureHomeKey(ctx context.Context, chatID int64) {
+	if a.legalStartRequired(ctx, chatID) {
+		return
+	}
+	a.msg.SetUserKeyboard(ctx, chatID, userKeyboardLabels(a.lang(chatID)))
 }
 
 // pricing отдаёт КОПИЮ сетки цен: возвращалась она по значению, но карты внутри
@@ -2035,31 +2165,43 @@ func (m botMessenger) StarTransactions(ctx context.Context, offset, limit int) (
 	return res.Transactions, nil
 }
 
-func (m botMessenger) RemoveKeyboard(ctx context.Context, chatID int64) {
-	msg, err := m.b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        "🔄",
-		ReplyMarkup: models.ReplyKeyboardRemove{RemoveKeyboard: true},
-	})
-	if err == nil && msg != nil {
-		_, _ = m.b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msg.ID})
+func (m botMessenger) SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) {
+	// Постоянные reply-кнопки снизу. Reply-клавиатуру Telegram можно прикрепить
+	// только к сообщению — отдельно её не отправить. Сообщение-носитель уходит
+	// пустым и удаляется через пару секунд: клиент успевает получить
+	// клавиатуру, а лишний пузырь в чате не остаётся. Удаление самого
+	// сообщения reply-клавиатуру не снимает — снять её может только
+	// ReplyKeyboardRemove или новая клавиатура.
+	var kb [][]models.KeyboardButton
+	for _, r := range rows {
+		var row []models.KeyboardButton
+		for _, b := range r {
+			row = append(row, models.KeyboardButton{Text: b})
+		}
+		if len(row) > 0 {
+			kb = append(kb, row)
+		}
 	}
-}
-
-func (m botMessenger) SetCommandKeyboard(ctx context.Context, chatID int64, label string) {
-
 	msg, err := m.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   "🏠",
+		Text:   " ",
 		ReplyMarkup: models.ReplyKeyboardMarkup{
-			Keyboard:       [][]models.KeyboardButton{{{Text: label}}},
+			Keyboard:       kb,
 			ResizeKeyboard: true,
-			IsPersistent:   true,
 		},
 	})
-	if err == nil && msg != nil {
-		_, _ = m.b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msg.ID})
+	if err != nil {
+		m.log.Warn("не удалось выставить reply-кнопки", "err", err, "user", chatID)
+		return
 	}
+	// Удаляем со своей задержкой и своим контекстом — жизнь апдейта тут ни при
+	// чём: клиент должен успеть доехать до клавиатуры, а задержка уже потом.
+	go func(messageID int) {
+		time.Sleep(3 * time.Second)
+		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = m.b.DeleteMessage(dctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: messageID})
+	}(msg.ID)
 }
 
 func (m botMessenger) AnswerCallback(ctx context.Context, id string) {

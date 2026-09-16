@@ -172,6 +172,7 @@ func (a *App) showRenew(ctx context.Context, chatID int64) {
 		// Сценарий 3: тариф удалён, выключен или закрыт для покупателя.
 		a.sendKB(ctx, chatID, i18n.T(lang, "renew.plan_gone"), [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "btn.buy"), "menu:buy")},
+			{btn(i18n.T(lang, "btn.back"), "menu:vpn")},
 			homeRow(lang),
 		})
 		return

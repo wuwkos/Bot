@@ -965,6 +965,8 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 	panel := a.panel
 	a.mu.Unlock()
 	home := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.home"), "menu:home")}
+	// «Назад» с экранов, куда ведёт /vpn, возвращает в хаб подключения.
+	backVPN := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:vpn")}
 	var url, expireAt, status string
 	ok := false
 	var perr error
@@ -980,7 +982,7 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 		// Купить», и он рисковал оплатить второй раз.
 		a.log.Warn("экран подписки: панель недоступна", "err", perr, "user", chatID)
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "subs.unavailable"),
-			[][]models.InlineKeyboardButton{{btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs")}, home})
+			[][]models.InlineKeyboardButton{{btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs")}, backVPN, home})
 		return
 	}
 	if !ok {
@@ -990,11 +992,14 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 		if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 			rows = append(rows, row)
 		}
-		rows = append(rows, home)
+		rows = append(rows, backVPN, home)
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "subs.none"), rows)
 		return
 	}
 	rows := [][]models.InlineKeyboardButton{}
+	if validButtonURL(url) {
+		rows = append(rows, []models.InlineKeyboardButton{{Text: i18n.T(lang, "btn.connect"), URL: url}})
+	}
 	if sup := a.supportURL(); sup != "" {
 		rows = append(rows, []models.InlineKeyboardButton{{Text: i18n.T(lang, "btn.support"), URL: sup}})
 	}
@@ -1002,7 +1007,7 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 		if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 			rows = append(rows, row)
 		}
-		rows = append(rows, home)
+		rows = append(rows, backVPN, home)
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription, i18n.T(lang, "subs.blocked"), rows)
 		return
 	}
@@ -1016,7 +1021,7 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 		if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 			rows = append(rows, row)
 		}
-		rows = append(rows, home)
+		rows = append(rows, backVPN, home)
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription,
 			i18n.T(lang, key, formatExpire(expireAt, lang)), rows)
 		return
@@ -1031,8 +1036,8 @@ func (a *App) showMySubs(ctx context.Context, chatID int64) {
 	if row := a.autoPayRow(ctx, chatID, lang); row != nil {
 		rows = append(rows, row)
 	}
-	rows = append(rows, home)
-	text := a.subActiveText(ctx, chatID, url, expireAt) + devLine + a.addSubLine(ctx, chatID)
+	rows = append(rows, backVPN, home)
+	text := a.subActiveText(ctx, chatID, url, expireAt) + i18n.T(lang, "sub.howto") + devLine + a.addSubLine(ctx, chatID)
 	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, text, rows)
 }
 

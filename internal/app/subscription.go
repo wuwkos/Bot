@@ -41,6 +41,17 @@ func (a *App) supportURL() string {
 	return ""
 }
 
+// groupURL — адрес канала/группы из админки (Контакты → группа). Пусто, если
+// не задан или битый.
+func (a *App) groupURL() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.botCfg != nil && validButtonURL(a.botCfg.Contact.GroupURL) {
+		return a.botCfg.Contact.GroupURL
+	}
+	return ""
+}
+
 // displayTZ — пояс, в котором бот показывает время И считает границы суток для
 // сводок. Одно место на оба: раньше печать шла по Москве, а «сегодня» в
 // аналитике — по всемирным суткам, и выручка обнулялась в три ночи.

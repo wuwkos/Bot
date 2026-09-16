@@ -46,7 +46,7 @@ func (a *App) MiniMe(ctx context.Context, tgID int64) web.MiniMeDTO {
 	return dto
 }
 
-// MiniMenu mirrors navRow: it reports exactly which actions the chat bot would
+// MiniMenu mirrors userMenuRows: it reports exactly which actions the chat bot
 // offer this user, plus the enabled payment methods and contact links.
 func (a *App) MiniMenu(ctx context.Context, tgID int64, web_ bool) web.MiniMenuDTO {
 	dto := web.MiniMenuDTO{

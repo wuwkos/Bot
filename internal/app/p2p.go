@@ -115,8 +115,7 @@ func (a *App) showPlans(ctx context.Context, chatID int64) {
 		return
 	}
 
-	if a.legalRequired(ctx, chatID) {
-		a.askLegal(ctx, chatID)
+	if a.legalGateOrAsk(ctx, chatID) {
 		return
 	}
 	// Первая точка гейта доступности — сама витрина: она строится только из
@@ -150,7 +149,9 @@ func (a *App) showPlans(ctx context.Context, chatID int64) {
 		}
 		rows = append(rows, []models.InlineKeyboardButton{btn(label, "plo:"+p.Code)})
 	}
-	rows = append(rows, homeRow(lang))
+	rows = append(rows,
+		[]models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:vpn")},
+		homeRow(lang))
 	a.sendKBSection(ctx, chatID, assets.SectionBuySubscription, i18n.T(lang, "buy.choose_tariff"), rows)
 }
 
@@ -382,8 +383,7 @@ func (a *App) onMethod(ctx context.Context, chatID int64, val string) {
 	// Вторая точка гейта документов: кнопка способа оплаты могла пролежать в
 	// переписке с прошлого раза, а согласие за это время могли сбросить или
 	// гейт включить (тот же порядок, что у гейта доступности тарифа).
-	if a.legalRequired(ctx, chatID) {
-		a.askLegal(ctx, chatID)
+	if a.legalGateOrAsk(ctx, chatID) {
 		return
 	}
 	switch val {

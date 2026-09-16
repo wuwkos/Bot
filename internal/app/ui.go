@@ -152,22 +152,258 @@ func (a *App) invalidateSubCache(chatID int64) {
 	}
 }
 
-func (a *App) navRow(ctx context.Context, chatID int64) []models.InlineKeyboardButton {
-	lang := a.lang(chatID)
-	var row []models.InlineKeyboardButton
-	if a.userHasSub(ctx, chatID) {
-		row = append(row, btn(i18n.T(lang, "btn.mysubs"), "menu:mysubs"))
-		if a.renewEligible(ctx, chatID) {
-			row = append(row, btn(i18n.T(lang, "btn.renew"), "menu:renew"))
-		}
-	} else {
-		if a.trialAvailable(ctx, chatID) {
-			row = append(row, btn(i18n.T(lang, "btn.trial_user"), "menu:trial"))
-		}
-		row = append(row, btn(i18n.T(lang, "btn.buy"), "menu:buy"))
+// userKeyboardLabels — постоянные reply-кнопки снизу: «Подключить VPN»,
+// под ней в ряд «Главное меню» и «Помощь». Набор ОДИН на все стадии и экраны
+// (исключение — оферта: до согласия клавиатуры нет вовсе), поэтому здесь не
+// должно быть ничего, что зависит от состояния пользователя. Каждая подпись
+// обязана разбираться в userCommandKey — иначе кнопка немая.
+func userKeyboardLabels(lang string) [][]string {
+	return [][]string{
+		{i18n.T(lang, "rk.vpn")},
+		{i18n.T(lang, "rk.menu"), i18n.T(lang, "rk.help")},
 	}
-	row = append(row, btn(i18n.T(lang, "btn.balance"), "menu:balance"))
-	return row
+}
+
+// subState — состояние подписки для экранов: 0 нет, 1 активна, 2 неизвестно
+// (панель недоступна). Возвращает также срок окончания и ссылку подключения.
+func (a *App) vpnSubState(ctx context.Context, chatID int64) (int, string, string) {
+	a.mu.Lock()
+	panel := a.panel
+	a.mu.Unlock()
+	if panel == nil {
+		return 0, "", ""
+	}
+	url, expireAt, _, ok, err := panel.SubscriptionState(ctx, chatID)
+	if err != nil {
+		return 2, "", ""
+	}
+	if !ok {
+		return 0, "", ""
+	}
+	return 1, expireAt, url
+}
+
+// subDaysLeft — остаток дней по сроку панели, -1 если срок не разобрать.
+func subDaysLeft(expireAt string) int {
+	if expireAt == "" {
+		return -1
+	}
+	t, err := time.Parse(time.RFC3339, expireAt)
+	if err != nil {
+		return -1
+	}
+	return daysUntil(t, time.Now().UTC())
+}
+
+// showGreeting — экран /start: приветствие + кнопка подключения и канал.
+func (a *App) showGreeting(ctx context.Context, chatID int64, name string) {
+	a.ensureHomeKey(ctx, chatID)
+	photo, caption, ents := a.welcomeContent(name)
+	lang := a.lang(chatID)
+	rows := [][]models.InlineKeyboardButton{
+		{btn(i18n.T(lang, "btn.connect"), "menu:vpn")},
+		a.channelRow(lang),
+	}
+	a.sendBanner(ctx, chatID, photo, caption, ents, models.InlineKeyboardMarkup{InlineKeyboard: rows})
+}
+
+// showUserMenu — экран /menu: ID, статус подписки, кнопки разделов.
+func (a *App) showUserMenu(ctx context.Context, chatID int64) {
+	lang := a.lang(chatID)
+	a.ensureHomeKey(ctx, chatID)
+	var status string
+	switch st, expire, _ := a.subStateFor(ctx, chatID); st {
+	case 1:
+		if days := subDaysLeft(expire); days >= 0 {
+			status = i18n.T(lang, "ustatus.have", formatExpire(expire, lang), days)
+		} else {
+			status = i18n.T(lang, "ustatus.have_plain", formatExpire(expire, lang))
+		}
+	case 2:
+		status = i18n.T(lang, "ustatus.unknown")
+	default:
+		status = i18n.T(lang, "ustatus.none")
+	}
+	rows := [][]models.InlineKeyboardButton{
+		{btn(i18n.T(lang, "btn.my_vpn"), "menu:vpn")},
+		{btn(i18n.T(lang, "btn.referral"), "menu:ref")},
+	}
+	// Канал — над «Помощью», как заказано. Кнопка-ссылка на адрес из админки
+	// (Контакты → группа); ссылки нет — кнопка остаётся и отвечает, что канал
+	// ещё не настроен, чтобы не выглядеть мёртвой.
+	rows = append(rows, a.channelRow(lang))
+	rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.help"), "menu:info")})
+	if row := a.miniAppButtonRow(lang); row != nil {
+		rows = append(rows, row)
+	}
+	if row := a.legalMenuRow(lang); row != nil {
+		rows = append(rows, row)
+	}
+	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status), rows)
+}
+
+// channelRow — кнопка «Наш канал»: ссылка из админки, а если канал не задан —
+// кнопка-заглушка с уведомлением (ch:none), чтобы она всегда была на месте.
+func (a *App) channelRow(lang string) []models.InlineKeyboardButton {
+	if group := a.groupURL(); group != "" {
+		return []models.InlineKeyboardButton{{Text: i18n.T(lang, "info.channel"), URL: group}}
+	}
+	return []models.InlineKeyboardButton{btn(i18n.T(lang, "info.channel"), "ch:none")}
+}
+
+// daysWord — «1 день» / «3 дня» / «30 дней» для текстов.
+func daysWord(lang string, days int) string {
+	if lang == model.LangEN {
+		if days == 1 {
+			return "1 day"
+		}
+		return strconv.Itoa(days) + " days"
+	}
+	switch {
+	case days%10 == 1 && days%100 != 11:
+		return strconv.Itoa(days) + " день"
+	case days%10 >= 2 && days%10 <= 4 && (days%100 < 12 || days%100 > 14):
+		return strconv.Itoa(days) + " дня"
+	default:
+		return strconv.Itoa(days) + " дней"
+	}
+}
+
+// vpnPlanLine — строка «Тариф: …» для активной подписки. Длительность берётся
+// из снимка сделки (plan_snapshot): у триала снимка нет — называем его как есть.
+func (a *App) vpnPlanLine(ctx context.Context, chatID int64, lang string) string {
+	if a.store == nil {
+		return ""
+	}
+	u, _ := a.store.GetUser(ctx, chatID)
+	if u == nil {
+		return ""
+	}
+	if u.NotifyKind == "trial" {
+		return i18n.T(lang, "vpn.plan_trial")
+	}
+	if u.Snapshot == nil {
+		return ""
+	}
+	days := u.Snapshot.Days
+	if days == 0 && u.Snapshot.Months > 0 {
+		days = u.Snapshot.Months * 30
+	}
+	if days <= 0 {
+		return ""
+	}
+	return i18n.T(lang, "vpn.plan", daysWord(lang, days))
+}
+
+// localSubTrace — есть ли у пользователя локальный след подписки или триала
+// (платил/пробовал в этом боте). Когда панель недоступна, этот след —
+// единственный способ отличить «точно без подписки» от «не знаем»: новичку
+// без следа можно смело показывать обычный вход, платившему — нет.
+func (a *App) localSubTrace(ctx context.Context, chatID int64) bool {
+	if a.store == nil {
+		return false
+	}
+	u, _ := a.store.GetUser(ctx, chatID)
+	if u == nil {
+		return false
+	}
+	return u.SubExpireAt != "" || u.TrialUsedAt != "" || u.NotifyKind != ""
+}
+
+// subStateFor — состояние подписки для ЭКРАНОВ с поправкой на аварию панели:
+// панель молчит, а следа подписки/триала у человека нет — он точно ничего не
+// покупал, и статус «не удалось проверить» его только пугает. Считаем его
+// обычным «без подписки». Платившим остаётся честный статус-неизвестен.
+func (a *App) subStateFor(ctx context.Context, chatID int64) (int, string, string) {
+	st, expire, url := a.vpnSubState(ctx, chatID)
+	if st == 2 && !a.localSubTrace(ctx, chatID) {
+		return 0, "", ""
+	}
+	return st, expire, url
+}
+
+// showVPN — экран «Мой VPN»: статус подписки и действия по нему.
+//
+// Три состояния: активная подписка (подключение, белые списки, продление),
+// подписки нет (бесплатный триал, если он ещё доступен, и покупка) и панель
+// недоступна (ничего не продаём: предложение купить при аварии подтолкнуло бы
+// платящего клиента оплатить второй раз).
+func (a *App) showVPN(ctx context.Context, chatID int64) {
+	lang := a.lang(chatID)
+	a.ensureHomeKey(ctx, chatID)
+	// Возвратный гейт: после «Принимаю» человек должен увидеть хаб, а не
+	// витрину — он ничего не покупал, он подключался.
+	if a.legalGateBack(ctx, chatID, "vpn") {
+		return
+	}
+	title := i18n.T(lang, "vpn.title")
+	var head string
+	var rows [][]models.InlineKeyboardButton
+	switch st, expire, url := a.subStateFor(ctx, chatID); st {
+	case 1:
+		head = title + "\n" + i18n.T(lang, "vpn.status_on")
+		if line := a.vpnPlanLine(ctx, chatID, lang); line != "" {
+			head += "\n" + line
+		}
+		if days := subDaysLeft(expire); days >= 0 {
+			head += "\n" + i18n.T(lang, "vpn.until", daysWord(lang, days))
+		} else if expire != "" {
+			head += "\n" + i18n.T(lang, "vpn.until", formatExpire(expire, lang))
+		}
+		if url = a.rewriteSub(url); url != "" {
+			head += "\n" + i18n.T(lang, "vpn.sub_link", "<code>"+html_(url)+"</code>")
+		}
+		rows = [][]models.InlineKeyboardButton{
+			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
+			{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
+			{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
+		}
+	case 2:
+		head = title + "\n" + i18n.T(lang, "vpn.status_unknown")
+		rows = [][]models.InlineKeyboardButton{
+			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
+			{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
+		}
+	default:
+		if a.trialAvailable(ctx, chatID) {
+			head = title + "\n" + i18n.T(lang, "vpn.status_new") + "\n" + i18n.T(lang, "vpn.try_free")
+			rows = [][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "vpn.btn_try"), "menu:trial")},
+				{btn(i18n.T(lang, "vpn.btn_buy_sub"), "menu:buy")},
+			}
+		} else {
+			head = title + "\n" + i18n.T(lang, "vpn.status_off")
+			rows = [][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "vpn.btn_buy"), "menu:buy")},
+			}
+		}
+	}
+	rows = append(rows, homeRow(lang))
+	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, head, rows)
+}
+
+// showInfo — экран «Помощь»: контакт поддержки и оферта ссылкой.
+func (a *App) showInfo(ctx context.Context, chatID int64) {
+	lang := a.lang(chatID)
+	a.ensureHomeKey(ctx, chatID)
+	a.mu.Lock()
+	support := ""
+	if a.botCfg != nil {
+		support = a.botCfg.Contact.SupportURL
+	}
+	a.mu.Unlock()
+	supportLine := i18n.T(lang, "info.no_support")
+	if strings.TrimSpace(support) != "" {
+		supportLine = i18n.T(lang, "info.support", support)
+	}
+	text := i18n.T(lang, "info.title") + "\n\n" + supportLine
+	var rows [][]models.InlineKeyboardButton
+	if u := a.legalCfg().Terms.URL; u != "" {
+		rows = append(rows, []models.InlineKeyboardButton{{Text: i18n.T(lang, "info.offer"), URL: u}})
+	}
+	rows = append(rows, a.contactRows()...)
+	rows = append(rows, homeRow(lang))
+	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, text, rows)
 }
 
 func (a *App) renewEligible(ctx context.Context, chatID int64) bool {
@@ -563,20 +799,8 @@ func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name str
 		rows = a.adminMenuRows(lang)
 		photo = bannerInputFor(assets.SectionAdminStats)
 	} else {
-		rows = append(rows, a.navRow(ctx, chatID))
-		if a.csqttEnabled() {
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "csqtt.btn_menu"), "menu:csqtt")})
-		}
-		if row := a.miniAppButtonRow(lang); row != nil {
-			rows = append(rows, row)
-		}
-		if a.referralCfg().Enabled {
-			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.referral"), "menu:ref")})
-		}
-		if row := a.legalMenuRow(lang); row != nil {
-			rows = append(rows, row)
-		}
-		rows = append(rows, a.contactRows()...)
+		a.showUserMenu(ctx, chatID)
+		return
 	}
 	if len(ents) == 0 {
 		caption = a.applyPremium(caption)
@@ -606,7 +830,7 @@ func (a *App) registerUser(ctx context.Context, chatID int64, firstName, usernam
 		a.askLegal(ctx, chatID)
 		return
 	}
-	a.showMenu(ctx, chatID, false, displayName(firstName, username))
+	a.showGreeting(ctx, chatID, displayName(firstName, username))
 }
 
 func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool, firstName, username string) {
@@ -616,6 +840,10 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 	switch val {
 	case "buy":
 		a.showPlans(ctx, chatID)
+	case "vpn":
+		a.showVPN(ctx, chatID)
+	case "info":
+		a.showInfo(ctx, chatID)
 	case "renew":
 		// Продление ведёт на СВОЙ тариф: подписчику тарифа по ссылке витрина
 		// «Базового» продала бы чужие условия (или отказала бы вовсе).
@@ -740,7 +968,9 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 		if isAdmin {
 			a.showTrialAdmin(ctx, chatID)
 		} else {
-			if a.legalGateOrAsk(ctx, chatID) {
+			// Возвратный гейт: после «Принимаю» триал активируется, а не
+			// теряется на витрине.
+			if a.legalGateBack(ctx, chatID, "trial") {
 				return
 			}
 			a.activateTrial(ctx, chatID)

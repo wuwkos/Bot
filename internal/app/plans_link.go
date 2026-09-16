@@ -152,7 +152,9 @@ func (a *App) showPlanOfferView(ctx context.Context, chatID int64, p *model.Plan
 		// После «Принимаю» человека вернёт на этот же экран (см. onTerms):
 		// пришедший по ссылке на скрытый тариф не должен потерять его на
 		// витрине «Базового».
-		a.getUI(chatID).pendingPlanOffer = p.Code
+		ui := a.getUI(chatID)
+		ui.pendingPlanOffer = p.Code
+		ui.pendingLegalBack = ""
 		a.askLegal(ctx, chatID)
 		return
 	}
@@ -435,7 +437,9 @@ func (a *App) onPlanBuy(ctx context.Context, chatID int64, val string) {
 		return
 	}
 	if a.legalRequired(ctx, chatID) {
-		a.getUI(chatID).pendingPlanOffer = p.Code
+		ui := a.getUI(chatID)
+		ui.pendingPlanOffer = p.Code
+		ui.pendingLegalBack = ""
 		a.askLegal(ctx, chatID)
 		return
 	}

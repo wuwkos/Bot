@@ -73,19 +73,21 @@ func csqttExpireText(expires int64, lang string) string {
 }
 
 // showCsqttUser — пользовательский экран «Доступ к белым спискам» с отдельной
-// кнопкой «Получить данные».
+// кнопкой «Получить данные». «Назад» ведёт в хаб /vpn, откуда сюда пришли.
 func (a *App) showCsqttUser(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
+	back := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:vpn")}
 	if !a.csqttEnabled() {
 		a.sendKBSection(ctx, chatID, assets.SectionMySubscription,
 			i18n.T(lang, "csqtt.off_user"),
-			[][]models.InlineKeyboardButton{homeRow(lang)})
+			[][]models.InlineKeyboardButton{back, homeRow(lang)})
 		return
 	}
 	a.sendKBSection(ctx, chatID, assets.SectionMySubscription,
 		i18n.T(lang, "csqtt.user_title"),
 		[][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "csqtt.btn_get"), "csq:get")},
+			back,
 			homeRow(lang),
 		})
 }

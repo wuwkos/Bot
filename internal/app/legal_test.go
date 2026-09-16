@@ -61,7 +61,8 @@ func TestLegal_GateOnlyWhenEnabled(t *testing.T) {
 	}
 }
 
-// Согласие при входе: до «Принимаю» меню не показывается, после — показывается.
+// Согласие при входе: короткая оферта с одной кнопкой «Продолжить»; до неё
+// меню не показывается, после — показывается.
 func TestLegal_StartGate(t *testing.T) {
 	ctx := context.Background()
 	a, fm, fs := planAdminApp(t)
@@ -74,11 +75,14 @@ func TestLegal_StartGate(t *testing.T) {
 	}
 
 	a.handleMessage(ctx, msgText(uid, "/start"))
-	if !strings.Contains(fm.last(), "правила сервиса") {
-		t.Fatalf("на входе должны показать документы: %q", fm.last())
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
+		t.Fatalf("на входе должны показать оферту: %q", fm.last())
 	}
 	if !hasCB(fm.allCallbackData(), "terms:accept") {
 		t.Fatalf("нет кнопки согласия: %v", fm.allCallbackData())
+	}
+	if !hasLabel(fm.buttonLabels(), "Продолжить") {
+		t.Fatalf("кнопка должна быть одна — «Продолжить»: %v", fm.buttonLabels())
 	}
 
 	// «Не сейчас» в меню не пускает, но оставляет путь назад.
@@ -289,12 +293,12 @@ func TestLegal_StartGateHoldsHomeButton(t *testing.T) {
 
 	a.handleMessage(ctx, msgText(uid, "/start"))
 	a.handleCallback(ctx, cb(uid, "menu:home"))
-	if !strings.Contains(fm.last(), "правила") {
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
 		t.Fatalf("«На главную» не должна пускать в меню без согласия: %q", fm.last())
 	}
 	a.handleCallback(ctx, cb(uid, "terms:accept"))
 	a.handleCallback(ctx, cb(uid, "menu:home"))
-	if strings.Contains(fm.last(), "правила") {
+	if strings.Contains(strings.ToLower(fm.last()), "оферт") {
 		t.Fatalf("после согласия меню должно открываться: %q", fm.last())
 	}
 }
@@ -517,6 +521,156 @@ func TestLegal_SplitKeepsTagsWhole(t *testing.T) {
 		if strings.HasSuffix(p, "&a") || strings.HasPrefix(p, "mp;") {
 			t.Fatalf("HTML-сущность разорвана: %q", p[:40])
 		}
+	}
+}
+
+// Самый первый /start нового пользователя показывает оферту (а не сразу
+// приветствие), а после «Принимаю» — только стартовое сообщение. Оферта
+// отправляется один раз: повторный /start идёт сразу в приветствие.
+func TestLegal_FirstStartShowsOfferOnce(t *testing.T) {
+	ctx := context.Background()
+	a, fm, _ := planAdminApp(t)
+	uid := int64(520)
+	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateStart: true}
+
+	a.handleMessage(ctx, msgText(uid, "/start"))
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
+		t.Fatalf("первый /start должен показать оферту: %q", fm.last())
+	}
+	if !hasCB(fm.allCallbackData(), "terms:accept") {
+		t.Fatalf("нет кнопки согласия: %v", fm.allCallbackData())
+	}
+	if !hasLabel(fm.buttonLabels(), "Продолжить") {
+		t.Fatalf("кнопка должна быть одна — «Продолжить»: %v", fm.buttonLabels())
+	}
+	if hasCB(fm.allCallbackData(), "terms:doc_terms") || hasCB(fm.allCallbackData(), "terms:decline") {
+		t.Fatalf("на входе только одна кнопка, без разбора документов и отказа: %v", fm.allCallbackData())
+	}
+	accepts := 0
+	for _, d := range fm.allCallbackData() {
+		if d == "terms:accept" {
+			accepts++
+		}
+	}
+
+	a.handleCallback(ctx, cb(uid, "terms:accept"))
+	if a.legalStartRequired(ctx, uid) {
+		t.Fatal("согласие не записано")
+	}
+	if !strings.Contains(fm.last(), "Привет") {
+		t.Fatalf("после согласия должно быть стартовое сообщение: %q", fm.last())
+	}
+	if strings.Contains(fm.last(), "Главное меню") {
+		t.Fatalf("после согласия не должно быть сразу меню: %q", fm.last())
+	}
+
+	a.handleMessage(ctx, msgText(uid, "/start"))
+	if !strings.Contains(fm.last(), "Привет") {
+		t.Fatalf("повторный /start идёт в приветствие без оферты: %q", fm.last())
+	}
+	for _, d := range fm.allCallbackData() {
+		if d == "terms:accept" {
+			accepts--
+		}
+	}
+	if accepts != 0 {
+		t.Fatal("оферта показана повторно")
+	}
+}
+
+// Отказ на входе не пускает дальше, но оставляет путь назад к документам.
+func TestLegal_FirstStartDeclineStaysBlocked(t *testing.T) {
+	ctx := context.Background()
+	a, fm, _ := planAdminApp(t)
+	uid := int64(521)
+	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateStart: true}
+
+	a.handleMessage(ctx, msgText(uid, "/start"))
+	a.handleCallback(ctx, cb(uid, "terms:decline"))
+	if strings.Contains(fm.last(), "Привет") {
+		t.Fatalf("отказ не должен вести в приветствие: %q", fm.last())
+	}
+	if !hasCB(fm.allCallbackData(), "terms:start") {
+		t.Fatalf("после отказа нужна кнопка вернуться к документам: %v", fm.allCallbackData())
+	}
+	if a.legalStartRequired(ctx, uid) != true {
+		t.Fatal("без согласия гейт должен оставаться")
+	}
+}
+
+// Согласие, спрошенное в хабе VPN, возвращает в хаб, а не на витрину:
+// человек подключался, а не покупал.
+func TestLegal_BackToVPN(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	uid := int64(522)
+	_ = fs.UpsertUser(ctx, uid)
+	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateBuy: true}
+
+	a.handleMessage(ctx, msgText(uid, "/vpn"))
+	if !strings.Contains(fm.last(), "правила сервиса") {
+		t.Fatalf("хаб должен упереться в оферту: %q", fm.last())
+	}
+	a.handleCallback(ctx, cb(uid, "terms:accept"))
+	if !strings.Contains(fm.last(), "Подписка не активна") {
+		t.Fatalf("после согласия должен быть экран VPN: %q", fm.last())
+	}
+	if strings.Contains(fm.last(), "Выберите тариф") {
+		t.Fatalf("после согласия не должно быть витрины: %q", fm.last())
+	}
+}
+
+// Согласие, спрошенное кнопкой триала, включает триал, а не теряет его на
+// витрине. Панели в тесте нет — важен сам маршрут: доходим до активации.
+func TestLegal_BackToTrial(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	uid := int64(523)
+	_ = fs.UpsertUser(ctx, uid)
+	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateBuy: true}
+	a.botCfg.Trial = model.TrialConfig{Enabled: true, Days: 3}
+
+	a.handleCallback(ctx, cb(uid, "menu:trial"))
+	if !strings.Contains(fm.last(), "правила сервиса") {
+		t.Fatalf("триал должен упереться в оферту: %q", fm.last())
+	}
+	a.handleCallback(ctx, cb(uid, "terms:accept"))
+	if !strings.Contains(fm.last(), "Не удалось активировать триал") {
+		t.Fatalf("после согласия триал должен активироваться: %q", fm.last())
+	}
+}
+
+// Покупка после брошенного хаба ведёт по покупательскому маршруту: отложенный
+// возврат чистится покупательским гейтом и не уводит от оплаты.
+func TestLegal_StaleBackClearedByBuy(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	uid := int64(524)
+	_ = fs.UpsertUser(ctx, uid)
+	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateBuy: true}
+
+	a.handleMessage(ctx, msgText(uid, "/vpn"))
+	a.handleCallback(ctx, cb(uid, "menu:buy"))
+	if got := a.getUI(uid).pendingLegalBack; got != "" {
+		t.Fatalf("покупательский гейт должен чистить возврат: %q", got)
+	}
+	accepts := 0
+	for _, d := range fm.allCallbackData() {
+		if d == "terms:accept" {
+			accepts++
+		}
+	}
+	a.handleCallback(ctx, cb(uid, "terms:accept"))
+	if strings.Contains(fm.last(), "Подписка не активна") {
+		t.Fatalf("после согласия на покупке не должно быть экрана VPN: %q", fm.last())
+	}
+	for _, d := range fm.allCallbackData() {
+		if d == "terms:accept" {
+			accepts--
+		}
+	}
+	if accepts != 0 {
+		t.Fatal("согласие должно закрыться с первого раза, без круга")
 	}
 }
 

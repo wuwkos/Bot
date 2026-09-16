@@ -184,8 +184,7 @@ func (f *fakeMsg) Delete(_ context.Context, _ int64, id int) {
 	f.deleted = append(f.deleted, id)
 	f.mu.Unlock()
 }
-func (f *fakeMsg) RemoveKeyboard(_ context.Context, _ int64)               {}
-func (f *fakeMsg) SetCommandKeyboard(_ context.Context, _ int64, _ string) {}
+func (f *fakeMsg) SetUserKeyboard(_ context.Context, _ int64, _ [][]string) {}
 func (f *fakeMsg) SendInvoice(_ context.Context, _ int64, title, _, payload, currency string, amount int) {
 	f.mu.Lock()
 	f.invoices = append(f.invoices, currency+":"+strconv.Itoa(amount)+":"+payload)
@@ -2297,16 +2296,8 @@ func TestUserLabel(t *testing.T) {
 	}
 }
 
-func btnData(rows []models.InlineKeyboardButton) string {
-	var b strings.Builder
-	for _, x := range rows {
-		b.WriteString(x.CallbackData + "|")
-	}
-	return b.String()
-}
-
-func TestNavRow(t *testing.T) {
-	a, _, fs := newTestApp(t)
+func TestVPNHub(t *testing.T) {
+	a, fm, fs := newTestApp(t)
 	a.store = fs
 	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
 	ctx := context.Background()
@@ -2316,7 +2307,7 @@ func TestNavRow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/by-telegram-id/") {
 			if hasSub {
-				_, _ = w.Write([]byte(`{"response":{"uuid":"u1","subscriptionUrl":"https://sub/abc"}}`))
+				_, _ = w.Write([]byte(`{"response":{"uuid":"u1","subscriptionUrl":"https://sub/abc","expireAt":"2030-01-01T00:00:00Z"}}`))
 				return
 			}
 			w.WriteHeader(http.StatusNotFound)
@@ -2327,14 +2318,107 @@ func TestNavRow(t *testing.T) {
 	defer srv.Close()
 	a.panel = remnawave.New(model.PanelConfig{Mode: model.ModeRemote, BaseURL: srv.URL, APIToken: "t"})
 
-	if row := a.navRow(ctx, user); btnData(row) != "menu:buy|menu:balance|" {
-		t.Fatalf("юзер без подписки (без Главной в строке действий): %s", btnData(row))
+	// Кнопки последнего экрана: записанные с момента before.
+	since := func(before int) string {
+		all := fm.allCallbackData()
+		if before > len(all) {
+			before = len(all)
+		}
+		return strings.Join(all[before:], "|")
 	}
 
+	// Новичок с доступным триалом: бесплатный вход и покупка.
+	a.botCfg.Trial = model.TrialConfig{Enabled: true, Days: 7}
+	before := len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !strings.Contains(fm.last(), "Не подключён") || !strings.Contains(fm.last(), "бесплатно") {
+		t.Fatalf("новичку — статус и предложение триала: %q", fm.last())
+	}
+	if got := since(before); got != "menu:trial|menu:buy|menu:home" {
+		t.Fatalf("новичок: триал и покупка, получено %q", got)
+	}
+
+	// Триал уже использован — только покупка.
+	_ = fs.UpsertUser(ctx, user)
+	_ = fs.SetTrialUsed(ctx, user, "2026-01-01T00:00:00Z")
+	before = len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !strings.Contains(fm.last(), "Подписка не активна") {
+		t.Fatalf("без подписки экран должен так и говорить: %q", fm.last())
+	}
+	if got := since(before); got != "menu:buy|menu:home" {
+		t.Fatalf("без подписки и триала — только покупка, получено %q", got)
+	}
+
+	// Активная подписка: подключение, белые списки, продление.
 	hasSub = true
-	a.invalidateSubCache(user)
-	if row := a.navRow(ctx, user); btnData(row) != "menu:mysubs|menu:balance|" {
-		t.Fatalf("юзер с подпиской: %s", btnData(row))
+	before = len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !strings.Contains(fm.last(), "Активен") || !strings.Contains(fm.last(), "До окончания") {
+		t.Fatalf("активная подписка должна показывать статус и срок: %q", fm.last())
+	}
+	if got := since(before); got != "menu:mysubs|menu:csqtt|menu:renew|menu:home" {
+		t.Fatalf("активный набор кнопок, получено %q", got)
+	}
+}
+
+// Панель недоступна: новичку без следа покупки показываем обычный вход
+// (триал/покупка), а не «не удалось проверить»; платившему — честный
+// статус-неизвестен без предложения купить.
+func TestVPN_PanelDown(t *testing.T) {
+	a, fm, fs := newTestApp(t)
+	a.store = fs
+	a.botCfg = &model.BotConfig{Installed: true, Language: "ru", Trial: model.TrialConfig{Enabled: true, Days: 7}}
+	ctx := context.Background()
+	const user int64 = 555
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	a.panel = remnawave.New(model.PanelConfig{Mode: model.ModeRemote, BaseURL: srv.URL, APIToken: "t"})
+
+	// Новый: следа подписки нет — обычный вход.
+	before := len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !strings.Contains(fm.last(), "Не подключён") || !strings.Contains(fm.last(), "бесплатно") {
+		t.Fatalf("новичок при аварии панели должен видеть вход: %q", fm.last())
+	}
+	if strings.Contains(fm.last(), "Не удалось проверить") {
+		t.Fatalf("новичку нельзя показывать статус-неизвестен: %q", fm.last())
+	}
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:trial|menu:buy|menu:home" {
+		t.Fatalf("новичок: триал и покупка, получено %q", got)
+	}
+
+	// Плативший: честный статус-неизвестен, без предложения купить.
+	_ = fs.UpsertUser(ctx, user)
+	_ = fs.SetSubExpiry(ctx, user, "2030-01-01T00:00:00Z", "buy")
+	before = len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !strings.Contains(fm.last(), "Не удалось проверить") {
+		t.Fatalf("плативший при аварии панели должен видеть статус-неизвестен: %q", fm.last())
+	}
+	if strings.Contains(fm.last(), "Купить") {
+		t.Fatalf("платившему нельзя предлагать покупку: %q", fm.last())
+	}
+}
+
+func TestUserCommands(t *testing.T) {
+	a, fm, fs := newTestApp(t)
+	a.store = fs
+	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
+	ctx := context.Background()
+
+	for _, text := range []string{"/vpn", "/menu", "/ref", "/info", "🚀 Подключить VPN", "🏠 Главное меню", "❓ Помощь", "👥 Пригласить друга", "ℹ️ Информация", "🏠 Главная"} {
+		before := len(fm.texts)
+		a.handleMessage(ctx, msgText(555, text))
+		if len(fm.texts) <= before {
+			t.Errorf("команда/кнопка %q ничего не отрисовала", text)
+		}
+	}
+	if !strings.Contains(fm.joined(), "Ваш ID") {
+		t.Errorf("экран /menu должен показывать ID:\n%s", fm.joined())
 	}
 }
 
@@ -2425,8 +2509,12 @@ func TestStarsFlow(t *testing.T) {
 		t.Fatal("оплата не записана в лог")
 	}
 
-	if row := a.navRow(ctx, user); btnData(row) != "menu:mysubs|menu:balance|" {
-		t.Fatalf("после Stars-оплаты ожидались Мои подписки: %s", btnData(row))
+	// После оплаты экран /vpn — «активный» набор: подключение, белые списки,
+	// продление.
+	before := len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:mysubs|menu:csqtt|menu:renew|menu:home" {
+		t.Fatalf("после Stars-оплаты экран /vpn не тот: %q", got)
 	}
 }
 
@@ -2751,4 +2839,37 @@ func TestP2P_ReceiptAfterRestart(t *testing.T) {
 			t.Fatalf("бот не должен был ничего отправлять:\n%s", fm.joined())
 		}
 	})
+}
+
+// Reply-кнопки всегда на месте: /kb убран, прятать их нечем. Раскладка
+// одинакова для обоих языков и не зависит от стадии.
+func TestReplyKeyboard_AllButtonsRouted(t *testing.T) {
+	for _, lang := range []string{"ru", "en"} {
+		rows := userKeyboardLabels(lang)
+		if len(rows) != 2 {
+			t.Fatalf("[%s] раскладка не та: %+v", lang, rows)
+		}
+		for _, row := range rows {
+			for _, label := range row {
+				if userCommandKey(label) == "" {
+					t.Fatalf("[%s] немая кнопка %q", lang, label)
+				}
+			}
+		}
+	}
+	// Старые подписи из прошлых версий клавиатуры продолжают работать.
+	for _, old := range []string{"👥 Пригласить друга", "ℹ️ Информация"} {
+		if userCommandKey(old) == "" {
+			t.Fatalf("старая кнопка %q перестала разбираться", old)
+		}
+	}
+}
+
+func hasLabel(list []string, want string) bool {
+	for _, v := range list {
+		if strings.Contains(v, want) {
+			return true
+		}
+	}
+	return false
 }

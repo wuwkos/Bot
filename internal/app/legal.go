@@ -271,6 +271,22 @@ func (a *App) legalGateOrAsk(ctx context.Context, chatID int64) bool {
 	if !a.legalRequired(ctx, chatID) {
 		return false
 	}
+	// Покупка — новый маршрут: забываем отложенный возврат на VPN/триал.
+	// Иначе человек, бросивший хаб на экране согласия и ушедший покупать,
+	// после «Принимаю» уехал бы не на оплату, а назад в хаб.
+	a.getUI(chatID).pendingLegalBack = ""
+	a.askLegal(ctx, chatID)
+	return true
+}
+
+// legalGateBack — гейт документов с возвратом: после «Принимаю» человека ведут
+// туда, откуда он пришёл (vpn — хаб подключения, trial — активация триала),
+// а не на витрину. Для покупок — обычный legalGateOrAsk.
+func (a *App) legalGateBack(ctx context.Context, chatID int64, back string) bool {
+	if !a.legalRequired(ctx, chatID) {
+		return false
+	}
+	a.getUI(chatID).pendingLegalBack = back
 	a.askLegal(ctx, chatID)
 	return true
 }
@@ -283,6 +299,15 @@ func (a *App) askLegal(ctx context.Context, chatID int64) {
 		// молча пропасть нельзя — возвращаем в меню.
 		a.getUI(chatID).pendingLegalHome = false
 		a.sendKB(ctx, chatID, i18n.T(lang, "cmd.terms_none"), [][]models.InlineKeyboardButton{homeRow(lang)})
+		return
+	}
+	// Вход в бота — короткая оферта в одну кнопку: новичок подтверждает
+	// согласие нажатием «Продолжить», полный разбор документов ему не нужен.
+	// Покупательский гейт ниже показывает развёрнутый экран как раньше.
+	if a.getUI(chatID).pendingLegalHome {
+		a.sendKB(ctx, chatID, i18n.T(lang, "legal.start_offer"), [][]models.InlineKeyboardButton{
+			{btn(i18n.T(lang, "legal.btn_continue"), "terms:accept")},
+		})
 		return
 	}
 	body := i18n.T(lang, "legal.accept_intro")
@@ -438,16 +463,31 @@ func (a *App) onTerms(ctx context.Context, chatID int64, val, firstName, usernam
 			a.openPlanLink(ctx, chatID, code)
 			return
 		}
-		// Согласие на входе (а не перед покупкой) ведёт в меню: человек ничего
-		// не покупал, витрина ему сейчас не нужна.
+		// Согласие на входе ведёт на стартовое сообщение: оферта показана один
+		// раз и уже записана, а знакомство с ботом начинается с приветствия —
+		// меню человек откроет кнопкой «Подключить VPN» или «Главное меню».
 		if fromStart {
-			a.enterHome(ctx, chatID, chatID == a.cfg.AdminID, firstName, username)
+			a.showGreeting(ctx, chatID, displayName(firstName, username))
 			return
+		}
+		// Согласие спросили посреди действия (хаб VPN, триал) — возвращаем
+		// туда, откуда человек пришёл, а не на витрину.
+		if back := ui.pendingLegalBack; back != "" {
+			ui.pendingLegalBack = ""
+			switch back {
+			case "vpn":
+				a.showVPN(ctx, chatID)
+				return
+			case "trial":
+				a.activateTrial(ctx, chatID)
+				return
+			}
 		}
 		a.showPlans(ctx, chatID)
 	case val == "decline":
 		ui := a.getUI(chatID)
 		ui.pendingPlanOffer = ""
+		ui.pendingLegalBack = ""
 		// Вход закрыт согласием — отказ не должен возвращать в меню ни с
 		// экрана входа, ни с экрана покупки: оба ведут в одно и то же место.
 		if ui.pendingLegalHome || a.legalStartRequired(ctx, chatID) {

@@ -13,6 +13,9 @@ bootstrap.json
 
 # Сборочные артефакты.
 /bot
+/remnabot.exe
+/.data/
+.botdata/
 /out
 .gotool/
 

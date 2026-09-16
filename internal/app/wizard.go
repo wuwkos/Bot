@@ -118,6 +118,7 @@ const (
 	cbPlanBuy   = "plb"
 	cbPlanView  = "plo"
 	cbCsqtt     = "csq"
+	cbChannel   = "ch"
 )
 
 func (a *App) handleCallback(ctx context.Context, cq *models.CallbackQuery) {
@@ -325,6 +326,11 @@ func (a *App) handleCallback(ctx context.Context, cq *models.CallbackQuery) {
 	case cbTerms:
 
 		a.onTerms(ctx, chatID, val, cq.From.FirstName, cq.From.Username)
+	case cbChannel:
+		// Кнопка «Наш канал» без настроенной ссылки: не молчать же.
+		if val == "none" {
+			a.send(ctx, chatID, i18n.T(a.lang(chatID), "info.channel_none"))
+		}
 	case cbLegal:
 		if isAdmin {
 			a.onLegalAdmin(ctx, chatID, val)
