@@ -966,3 +966,26 @@ func TestTrialLockNotice_AllowBuy(t *testing.T) {
 		t.Fatal("админ разрешил покупку — гейта быть не должно")
 	}
 }
+
+// «Продлить» из /vpn: на карточке тарифа и на экране способов оплаты есть
+// «Назад» — на карточке в /vpn, со способов оплаты обратно на карточку.
+func TestRenew_HasBackButtons(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	if err := a.syncBasePlan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	uid := int64(900)
+	_ = fs.UpsertUser(ctx, uid)
+	_ = fs.SetUserSnapshot(ctx, uid, &model.PlanSnapshot{Code: model.PlanCodeBase, Months: 1, Price: "150"})
+
+	a.handleCallback(ctx, cb(uid, "menu:renew"))
+	if !hasCB(fm.allCallbackData(), "menu:vpn") {
+		t.Fatalf("на карточке продления нужна «Назад» в /vpn: %v", fm.allCallbackData())
+	}
+
+	a.handleCallback(ctx, cb(uid, "plb:"+model.PlanCodeBase+":1"))
+	if !hasCB(fm.allCallbackData(), "plo:"+model.PlanCodeBase) {
+		t.Fatalf("с экрана способов оплаты нужна «Назад» на карточку тарифа: %v", fm.allCallbackData())
+	}
+}

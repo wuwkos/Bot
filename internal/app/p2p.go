@@ -334,13 +334,16 @@ func (a *App) showMethodsSale(ctx context.Context, chatID int64, s *sale) {
 		payBtn := []models.InlineKeyboardButton{btn(i18n.T(lang, "balance.btn_pay", kopecksToRub(k)), "method:bal")}
 		rows = append([][]models.InlineKeyboardButton{payBtn}, rows...)
 	}
+	// «Назад» с экрана способов оплаты ведёт на карточку тарифа, откуда
+	// выбрали срок (у «Базового» без карточки — к списку тарифов).
+	back := []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), saleBackCB(s))}
 	if len(rows) == 0 && !gridCur {
 		// Настоящая причина: тариф в одной валюте, а оплата настроена в
 		// другой. Раньше здесь показывалось «способы оплаты ещё не настроены»
 		// — при настроенных способах.
 		a.sendPayKB(ctx, chatID, i18n.T(lang, "buy.currency_mismatch",
 			curSymbol(a.saleCurrency(s)), curSymbol(a.pricing().Currency)),
-			[][]models.InlineKeyboardButton{homeRow(lang)})
+			[][]models.InlineKeyboardButton{back, homeRow(lang)})
 		return
 	}
 	if len(rows) == 0 {
@@ -348,14 +351,14 @@ func (a *App) showMethodsSale(ctx context.Context, chatID int64, s *sale) {
 		if a.topUpEnabled() {
 			empty = append(empty, []models.InlineKeyboardButton{btn(i18n.T(lang, "balance.btn_topup"), "menu:topup")})
 		}
-		a.sendPayKB(ctx, chatID, i18n.T(lang, "buy.no_methods"), append(empty, homeRow(lang)))
+		a.sendPayKB(ctx, chatID, i18n.T(lang, "buy.no_methods"), append(empty, back, homeRow(lang)))
 		return
 	}
 
 	if a.topUpEnabled() {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "balance.btn_topup"), "menu:topup")})
 	}
-	rows = append(rows, homeRow(lang))
+	rows = append(rows, back, homeRow(lang))
 	caption := i18n.T(lang, "buy.choose_method", kopecksToRub(bal))
 	// Смена тарифа: показываем зачёт остатка теми же цифрами, которые применит
 	// финализация, — человек должен видеть сдвиг срока ДО оплаты.
@@ -377,6 +380,16 @@ func (a *App) showMethodsSale(ctx context.Context, chatID int64, s *sale) {
 		}
 	}
 	a.sendPayKB(ctx, chatID, caption, rows)
+}
+
+// saleBackCB — куда ведёт «Назад» с экрана способов оплаты: на карточку
+// тарифа, откуда выбрали срок, а у «Базового» (своей карточки нет) — к списку
+// тарифов.
+func saleBackCB(s *sale) string {
+	if s != nil && s.Plan != nil && s.Plan.Code != "" {
+		return "plo:" + s.Plan.Code
+	}
+	return "menu:buy"
 }
 
 func (a *App) onMethod(ctx context.Context, chatID int64, val string) {

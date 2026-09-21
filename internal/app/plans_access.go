@@ -177,7 +177,8 @@ func (a *App) showRenew(ctx context.Context, chatID int64) {
 		})
 		return
 	}
-	view := offerView{switchPlan: true}
+	// Продление пришло из хаба /vpn — «Назад» возвращает туда же.
+	view := offerView{switchPlan: true, backToVPN: true}
 	if a.renewTermsChanged(p, snap) {
 		view.note = i18n.T(lang, "renew.terms_changed")
 	}

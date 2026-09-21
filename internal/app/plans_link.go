@@ -128,7 +128,8 @@ func (a *App) openPlanLink(ctx context.Context, chatID int64, code string) {
 }
 
 // offerView — как показать карточку тарифа: с плашкой (продление), с «назад
-// к списку» (пришли из витрины) и с кнопкой «выбрать другой тариф».
+// к списку» (пришли из витрины), с кнопкой «выбрать другой тариф» и с «назад»
+// в хаб подключения (продление из /vpn).
 type offerView struct {
 	// note — строка над карточкой (например, «условия изменились»).
 	note string
@@ -136,6 +137,8 @@ type offerView struct {
 	backToList bool
 	// switchPlan — кнопка «выбрать другой тариф» (продление).
 	switchPlan bool
+	// backToVPN — кнопка «назад» в /vpn (продление пришло из хаба).
+	backToVPN bool
 }
 
 // showPlanOffer — экран одного тарифа: описание и кнопки сроков с ценами.
@@ -182,6 +185,9 @@ func (a *App) showPlanOfferView(ctx context.Context, chatID int64, p *model.Plan
 	if view.backToList {
 		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:buy"), btn(i18n.T(lang, "btn.home"), "menu:home")})
 	} else {
+		if view.backToVPN {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.back"), "menu:vpn")})
+		}
 		rows = append(rows, homeRow(lang))
 	}
 

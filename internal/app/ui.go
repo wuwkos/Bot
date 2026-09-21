@@ -413,6 +413,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 				{btn(i18n.T(lang, "btn.help"), "menu:info")},
 			}
 		} else {
+			head += "\n\n" + i18n.T(lang, "vpn.dead_hint")
 			rows = [][]models.InlineKeyboardButton{
 				{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
 				{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
