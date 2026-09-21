@@ -2365,6 +2365,57 @@ func TestVPNHub(t *testing.T) {
 // Панель недоступна: новичку без следа покупки показываем обычный вход
 // (триал/покупка), а не «не удалось проверить»; платившему — честный
 // статус-неизвестен без предложения купить.
+// Просроченная подписка не должна выглядеть активной: и по статусу панели
+// (EXPIRED), и по одной лишь прошедшей дате. Ссылку мёртвой подписки не
+// показываем, первое действие — продление; главное меню тоже не врёт.
+func TestVPN_ExpiredSubNotActive(t *testing.T) {
+	a, fm, fs := newTestApp(t)
+	a.store = fs
+	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
+	ctx := context.Background()
+	const user int64 = 555
+	_ = fs.UpsertUser(ctx, user)
+
+	status, expire := "EXPIRED", "2026-09-15T20:30:00Z"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/by-telegram-id/") {
+			_, _ = w.Write([]byte(`{"response":[{"uuid":"u1","subscriptionUrl":"https://sub/abc","expireAt":"` + expire + `","status":"` + status + `"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	a.panel = remnawave.New(model.PanelConfig{Mode: model.ModeRemote, BaseURL: srv.URL, APIToken: "t"})
+
+	check := func(where string) {
+		t.Helper()
+		if !strings.Contains(fm.last(), "истекла") && !strings.Contains(fm.last(), "закончился") {
+			t.Fatalf("%s: просроченная подписка должна называться истёкшей: %q", where, fm.last())
+		}
+		if strings.Contains(fm.last(), "Активен") || strings.Contains(fm.last(), "активна до") {
+			t.Fatalf("%s: просроченная не должна выглядеть активной: %q", where, fm.last())
+		}
+		if strings.Contains(fm.last(), "sub/abc") {
+			t.Fatalf("%s: ссылку мёртвой подписки показывать нельзя: %q", where, fm.last())
+		}
+	}
+
+	before := len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	check("VPN")
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:renew|menu:mysubs|menu:csqtt|menu:home" {
+		t.Fatalf("на истёкшей подписке первое действие — продление, получено %q", got)
+	}
+
+	a.showUserMenu(ctx, user)
+	check("меню")
+
+	// Панель могла ещё не пересчитать статус — прошедшая дата решает сама.
+	status = "ACTIVE"
+	a.showVPN(ctx, user)
+	check("VPN (дата в прошлом)")
+}
+
 func TestVPN_PanelDown(t *testing.T) {
 	a, fm, fs := newTestApp(t)
 	a.store = fs

@@ -14,6 +14,7 @@ import (
 	"remnabot/internal/assets"
 	"remnabot/internal/i18n"
 	"remnabot/internal/model"
+	"remnabot/internal/remnawave"
 )
 
 //go:embed banner_default.jpg
@@ -164,23 +165,55 @@ func userKeyboardLabels(lang string) [][]string {
 	}
 }
 
-// subState — состояние подписки для экранов: 0 нет, 1 активна, 2 неизвестно
-// (панель недоступна). Возвращает также срок окончания и ссылку подключения.
-func (a *App) vpnSubState(ctx context.Context, chatID int64) (int, string, string) {
+// Состояния подписки для экранов.
+const (
+	subStNone    = 0 // панель не знает такого пользователя
+	subStActive  = 1 // живая подписка
+	subStUnknown = 2 // панель недоступна
+	subStDead    = 3 // истекла / трафик исчерпан / заблокирована
+)
+
+// subDeadReason — почему подписку нельзя считать живой: "blocked", "limited",
+// "expired" или "" (жива). Статус проверяется первым, но и дата не лишняя:
+// панель могла ещё не пересчитать статус, а срок уже в прошлом.
+func subDeadReason(status, expireAt string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case remnawave.StatusDisabled:
+		return "blocked"
+	case remnawave.StatusLimited:
+		return "limited"
+	case remnawave.StatusExpired:
+		return "expired"
+	}
+	if t, err := time.Parse(time.RFC3339, expireAt); err == nil && !t.After(time.Now()) {
+		return "expired"
+	}
+	return ""
+}
+
+// vpnSubState — состояние подписки: найдена ли, жива ли, срок, ссылка и
+// причина «мертва». Живой считается только незаблокированная подписка с
+// неистёкшим сроком: раньше экран показывал «🟢 Активен» всем, кого панель
+// вообще нашла, включая просроченных.
+func (a *App) vpnSubState(ctx context.Context, chatID int64) (int, string, string, string) {
 	a.mu.Lock()
 	panel := a.panel
 	a.mu.Unlock()
 	if panel == nil {
-		return 0, "", ""
+		return subStNone, "", "", ""
 	}
-	url, expireAt, _, ok, err := panel.SubscriptionState(ctx, chatID)
+	url, expireAt, status, ok, err := panel.SubscriptionState(ctx, chatID)
 	if err != nil {
-		return 2, "", ""
+		return subStUnknown, "", "", ""
 	}
 	if !ok {
-		return 0, "", ""
+		return subStNone, "", "", ""
 	}
-	return 1, expireAt, url
+	if reason := subDeadReason(status, expireAt); reason != "" {
+		// Мёртвой подписке ссылку не показываем: она не работает.
+		return subStDead, expireAt, "", reason
+	}
+	return subStActive, expireAt, url, ""
 }
 
 // subDaysLeft — остаток дней по сроку панели, -1 если срок не разобрать.
@@ -212,14 +245,23 @@ func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
 	a.ensureHomeKey(ctx, chatID)
 	var status string
-	switch st, expire, _ := a.subStateFor(ctx, chatID); st {
-	case 1:
+	switch st, expire, _, reason := a.subStateFor(ctx, chatID); st {
+	case subStActive:
 		if days := subDaysLeft(expire); days >= 0 {
 			status = i18n.T(lang, "ustatus.have", formatExpire(expire, lang), days)
 		} else {
 			status = i18n.T(lang, "ustatus.have_plain", formatExpire(expire, lang))
 		}
-	case 2:
+	case subStDead:
+		switch reason {
+		case "blocked":
+			status = i18n.T(lang, "ustatus.blocked")
+		case "limited":
+			status = i18n.T(lang, "ustatus.limited", formatExpire(expire, lang))
+		default:
+			status = i18n.T(lang, "ustatus.expired", formatExpire(expire, lang))
+		}
+	case subStUnknown:
 		status = i18n.T(lang, "ustatus.unknown")
 	default:
 		status = i18n.T(lang, "ustatus.none")
@@ -314,12 +356,12 @@ func (a *App) localSubTrace(ctx context.Context, chatID int64) bool {
 // панель молчит, а следа подписки/триала у человека нет — он точно ничего не
 // покупал, и статус «не удалось проверить» его только пугает. Считаем его
 // обычным «без подписки». Платившим остаётся честный статус-неизвестен.
-func (a *App) subStateFor(ctx context.Context, chatID int64) (int, string, string) {
-	st, expire, url := a.vpnSubState(ctx, chatID)
-	if st == 2 && !a.localSubTrace(ctx, chatID) {
-		return 0, "", ""
+func (a *App) subStateFor(ctx context.Context, chatID int64) (int, string, string, string) {
+	st, expire, url, reason := a.vpnSubState(ctx, chatID)
+	if st == subStUnknown && !a.localSubTrace(ctx, chatID) {
+		return subStNone, "", "", ""
 	}
-	return st, expire, url
+	return st, expire, url, reason
 }
 
 // showVPN — экран «Мой VPN»: статус подписки и действия по нему.
@@ -339,8 +381,8 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 	title := i18n.T(lang, "vpn.title")
 	var head string
 	var rows [][]models.InlineKeyboardButton
-	switch st, expire, url := a.subStateFor(ctx, chatID); st {
-	case 1:
+	switch st, expire, url, reason := a.subStateFor(ctx, chatID); st {
+	case subStActive:
 		head = title + "\n" + i18n.T(lang, "vpn.status_on")
 		if line := a.vpnPlanLine(ctx, chatID, lang); line != "" {
 			head += "\n" + line
@@ -358,7 +400,26 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 			{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
 			{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
 		}
-	case 2:
+	case subStDead:
+		// Просроченная, исчерпанная или заблокированная подписка — НЕ активна.
+		// Ссылку не показываем (не работает), первое действие — продление;
+		// при блокировке администратором продлевать нечего — ведём в поддержку.
+		head = title + "\n" + i18n.T(lang, "vpn.status_"+reason)
+		if line := a.vpnPlanLine(ctx, chatID, lang); line != "" {
+			head += "\n" + line
+		}
+		if reason == "blocked" {
+			rows = [][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "btn.help"), "menu:info")},
+			}
+		} else {
+			rows = [][]models.InlineKeyboardButton{
+				{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
+				{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
+				{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
+			}
+		}
+	case subStUnknown:
 		head = title + "\n" + i18n.T(lang, "vpn.status_unknown")
 		rows = [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},

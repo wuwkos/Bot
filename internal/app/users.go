@@ -1115,13 +1115,10 @@ func (a *App) devicesLine(ctx context.Context, chatID int64, panel *remnawave.Cl
 // Статус проверяется первым, но и дата не лишняя: панель могла ещё не
 // пересчитать статус, а срок уже в прошлом.
 func subDeadKey(status, expireAt string) string {
-	switch strings.ToUpper(strings.TrimSpace(status)) {
-	case remnawave.StatusExpired:
-		return "subs.expired"
-	case remnawave.StatusLimited:
+	switch subDeadReason(status, expireAt) {
+	case "limited":
 		return "subs.limited"
-	}
-	if t, err := time.Parse(time.RFC3339, expireAt); err == nil && !t.After(time.Now()) {
+	case "expired":
 		return "subs.expired"
 	}
 	return ""
