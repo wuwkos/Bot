@@ -5,6 +5,8 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"html"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -378,7 +380,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 	if a.legalGateBack(ctx, chatID, "vpn") {
 		return
 	}
-	title := i18n.T(lang, "vpn.title")
+	title := i18n.T(lang, "vpn.title_named", a.brandName(lang))
 	var head string
 	var rows [][]models.InlineKeyboardButton
 	switch st, expire, url, reason := a.subStateFor(ctx, chatID); st {
@@ -590,9 +592,107 @@ func (a *App) showIface(ctx context.Context, chatID int64) {
 		{btn(i18n.T(lang, "btn.section_banners"), "menu:welcome_sections")},
 		{btn(i18n.T(lang, "btn.contacts"), "menu:contacts")},
 		{btn(i18n.T(lang, "btn.devices_admin"), "menu:devices")},
+		{btn(i18n.T(lang, "btn.service_name") + ": " + a.serviceNameDisplay(lang), "menu:svcname")},
 		{btn(i18n.T(lang, "btn.bot_lang")+": "+i18n.T(lang, "lang.name_"+lang), "menu:botlang")},
 		homeRow(lang),
 	})
+}
+
+// serviceName — название сервиса из админки ("" — не задано).
+func (a *App) serviceName() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.botCfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(a.botCfg.ServiceName)
+}
+
+// serviceNameDisplay — название как есть для подписей кнопок и экранов
+// (без экранирования: текст кнопок Telegram разметкой не разбирает).
+func (a *App) serviceNameDisplay(lang string) string {
+	if n := a.serviceName(); n != "" {
+		return n
+	}
+	return i18n.T(lang, "brand.default")
+}
+
+// brandName — название сервиса для HTML-текстов: заданное админом или
+// стандартное «VPN». Экранируется — подставляется внутрь разметки.
+func (a *App) brandName(lang string) string {
+	if n := a.serviceName(); n != "" {
+		return html.EscapeString(n)
+	}
+	return i18n.T(lang, "brand.default")
+}
+
+// serviceNameRe — что вообще может быть названием сервиса: буквы, цифры,
+// пробел и обычная пунктуация брендов. Разметка, переносы строк и эмодзи
+// отсекаются здесь, а не в момент подстановки.
+var serviceNameRe = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._+\-]{0,31}$`)
+
+// sanitizeServiceName проверяет ввод админа: ok=false — название не подходит.
+// Пустое и «-» означают «вернуть стандартное».
+func sanitizeServiceName(raw string) (name string, ok bool) {
+	s := strings.TrimSpace(raw)
+	if s == "" || s == "-" || s == "—" {
+		return "", true
+	}
+	if !serviceNameRe.MatchString(s) {
+		return "", false
+	}
+	return s, true
+}
+
+// showServiceName — админский экран названия сервиса.
+func (a *App) showServiceName(ctx context.Context, chatID int64) {
+	lang := a.lang(chatID)
+	rows := [][]models.InlineKeyboardButton{
+		{btn(i18n.T(lang, "svc.btn_edit"), "svc:edit"), btn(i18n.T(lang, "svc.btn_reset"), "svc:reset")},
+		navBack(lang, "menu:iface"),
+	}
+	body := i18n.T(lang, "svc.title") +
+		i18n.T(lang, "svc.current", html.EscapeString(a.serviceNameDisplay(lang))) +
+		i18n.T(lang, "svc.hint", i18n.T(lang, "brand.default"))
+	a.sendIfaceKB(ctx, chatID, body, rows)
+}
+
+// applyServiceName сохраняет введённое название. Мусор не принимаем: экран
+// остаётся в режиме ввода и повторяет вопрос.
+func (a *App) applyServiceName(ctx context.Context, chatID int64, text string) {
+	lang := a.lang(chatID)
+	name, ok := sanitizeServiceName(text)
+	if !ok {
+		a.askInput(ctx, chatID, i18n.T(lang, "svc.bad"), "menu:svcname")
+		return
+	}
+	a.getUI(chatID).adminInput = ""
+	a.mu.Lock()
+	if a.botCfg != nil {
+		a.botCfg.ServiceName = name
+	}
+	a.mu.Unlock()
+	_ = a.saveBotConfig(ctx)
+	a.showServiceName(ctx, chatID)
+}
+
+// onServiceNameAdmin — кнопки админского экрана названия сервиса.
+func (a *App) onServiceNameAdmin(ctx context.Context, chatID int64, val string) {
+	lang := a.lang(chatID)
+	switch val {
+	case "edit":
+		a.getUI(chatID).adminInput = "svc_name"
+		a.askInput(ctx, chatID, i18n.T(lang, "svc.ask"), "menu:svcname")
+	case "reset":
+		a.getUI(chatID).adminInput = ""
+		a.mu.Lock()
+		if a.botCfg != nil {
+			a.botCfg.ServiceName = ""
+		}
+		a.mu.Unlock()
+		_ = a.saveBotConfig(ctx)
+		a.showServiceName(ctx, chatID)
+	}
 }
 
 // showBotLang — выбор языка бота.
@@ -836,7 +936,7 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		caption = i18n.T(lang, "menu.welcome", name)
+		caption = i18n.T(lang, "menu.welcome", name, a.brandName(lang))
 	} else if len(w.Entities) > 0 {
 		_ = json.Unmarshal(w.Entities, &ents)
 	}
@@ -1040,6 +1140,10 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 	case "contacts":
 		if isAdmin {
 			a.showContacts(ctx, chatID)
+		}
+	case "svcname":
+		if isAdmin {
+			a.showServiceName(ctx, chatID)
 		}
 	case "update":
 		if isAdmin {

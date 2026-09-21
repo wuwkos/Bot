@@ -2416,6 +2416,52 @@ func TestVPN_ExpiredSubNotActive(t *testing.T) {
 	check("VPN (дата в прошлом)")
 }
 
+// Название сервиса из админки подставляется в заголовок экрана VPN и в
+// стандартное приветствие; мусор не принимается, «-» возвращает «VPN».
+func TestServiceName_Branding(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	_ = fs.UpsertUser(ctx, planAdmin)
+
+	a.handleCallback(ctx, cb(planAdmin, "menu:svcname"))
+	if !strings.Contains(fm.last(), "Название сервиса") {
+		t.Fatalf("экран названия сервиса не открылся: %q", fm.last())
+	}
+
+	a.handleCallback(ctx, cb(planAdmin, "svc:edit"))
+	a.handleMessage(ctx, msgText(planAdmin, "ShadyVPN"))
+	if a.botCfg.ServiceName != "ShadyVPN" {
+		t.Fatalf("название не сохранено: %q", a.botCfg.ServiceName)
+	}
+
+	// Пользовательский экран VPN носит бренд.
+	a.showVPN(ctx, 777)
+	if !strings.Contains(fm.last(), "Ваш ShadyVPN") {
+		t.Fatalf("заголовок VPN без бренда: %q", fm.last())
+	}
+	// Стандартное приветствие — тоже.
+	a.showGreeting(ctx, 777, "Тест")
+	if !strings.Contains(fm.last(), "ShadyVPN") {
+		t.Fatalf("приветствие без бренда: %q", fm.last())
+	}
+
+	// Мусор (разметка, перенос строки) не принимаем — название не меняется.
+	a.handleCallback(ctx, cb(planAdmin, "svc:edit"))
+	a.handleMessage(ctx, msgText(planAdmin, "плохое <b>название</b>"))
+	if a.botCfg.ServiceName != "ShadyVPN" {
+		t.Fatalf("мусор принят за название: %q", a.botCfg.ServiceName)
+	}
+	if !strings.Contains(fm.last(), "не подойдёт") {
+		t.Fatalf("нет подсказки про плохой ввод: %q", fm.last())
+	}
+
+	// «-» возвращает стандартное.
+	a.handleMessage(ctx, msgText(planAdmin, "-"))
+	if a.botCfg.ServiceName != "" {
+		t.Fatalf("«-» не сбросил название: %q", a.botCfg.ServiceName)
+	}
+}
+
 func TestVPN_PanelDown(t *testing.T) {
 	a, fm, fs := newTestApp(t)
 	a.store = fs

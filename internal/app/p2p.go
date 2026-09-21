@@ -1666,6 +1666,8 @@ func (a *App) handleAdminText(ctx context.Context, chatID int64, text string) {
 	case "cab_title":
 		ui.adminInput = ""
 		a.setCabinetField(ctx, chatID, "title", text)
+	case "svc_name":
+		a.applyServiceName(ctx, chatID, text)
 	case "cab_desc":
 		ui.adminInput = ""
 		a.setCabinetField(ctx, chatID, "desc", text)

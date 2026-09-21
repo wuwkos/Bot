@@ -158,6 +158,10 @@ type BotConfig struct {
 	Pricing    Pricing       `json:"pricing"`
 	Welcome    WelcomeConfig `json:"welcome"`
 
+	// ServiceName — название сервиса (бренд), задаётся в админке. Подставляется
+	// в заголовки бота: «🔌 Ваш ShadyVPN». Пусто — стандартное «VPN».
+	ServiceName string `json:"service_name"`
+
 	PremiumEmoji map[string]string `json:"premium_emoji"`
 
 	SubscriptionDomain string `json:"subscription_domain"`
