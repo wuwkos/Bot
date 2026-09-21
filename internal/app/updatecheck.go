@@ -14,7 +14,22 @@ import (
 	"remnabot/internal/i18n"
 )
 
-const updateRepoSlug = "Mrvibecodic/chill-remna-bot"
+// updateRepoSlugDefault — репозиторий апстрима: с ним сверяется проверка
+// обновлений, если владелец установки не задал свой через UPDATE_REPO.
+const updateRepoSlugDefault = "Mrvibecodic/chill-remna-bot"
+
+// updateRepoSlug — репозиторий GitHub (owner/name), чьи коммиты и успешные
+// сборки образа сверяет проверка обновлений. Форк обязан указать свой:
+// иначе баннер «доступно обновление» вечно показывает чужие коммиты, а
+// список «что нового» не имеет отношения к установленному образу.
+func (a *App) updateRepoSlug() string {
+	if a.cfg != nil {
+		if r := strings.TrimSpace(a.cfg.UpdateRepo); r != "" {
+			return r
+		}
+	}
+	return updateRepoSlugDefault
+}
 
 // channelBranch maps an update channel to its git branch.
 func channelBranch(ch string) string {
@@ -87,7 +102,7 @@ type ghCommit struct {
 }
 
 func (a *App) fetchCommits(ctx context.Context, branch string) ([]ghCommit, error) {
-	url := "https://api.github.com/repos/" + updateRepoSlug + "/commits?sha=" + branch + "&per_page=30"
+	url := "https://api.github.com/repos/" + a.updateRepoSlug() + "/commits?sha=" + branch + "&per_page=30"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -155,7 +170,7 @@ func sliceBetween(commits []ghCommit, current, latest string) []ghCommit {
 }
 
 func (a *App) latestBuiltSHA(ctx context.Context, branch string) (string, error) {
-	url := "https://api.github.com/repos/" + updateRepoSlug + "/actions/workflows/docker.yml/runs?branch=" + branch + "&status=success&per_page=1"
+	url := "https://api.github.com/repos/" + a.updateRepoSlug() + "/actions/workflows/docker.yml/runs?branch=" + branch + "&status=success&per_page=1"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", err

@@ -2,9 +2,10 @@ name: remnachillbot
 
 services:
   bot:
-    # :v1 — все релизы 1.x.y (без автопрыжка на 2.0.0). Другие варианты:
-    # :latest — всегда свежий релиз, :dev — превью, :v1.0.0 — жёсткий пин.
-    image: ghcr.io/mrvibecodic/chill-remna-bot:v1
+    # Образ этого форка (собирается GitHub Actions из ветки main).
+    # :latest — свежая сборка main, :dev — превью из ветки dev,
+    # :sha-xxxxxxx — конкретная сборка.
+    image: ghcr.io/wuwkos/bot:latest
     pull_policy: always
     container_name: remnabot
     restart: unless-stopped
@@ -16,6 +17,10 @@ services:
       COMPOSE_FILE_PATH: /compose/docker-compose.yml
       COMPOSE_HOST_DIR: /opt/remnachillbot
       PANEL_CONTAINER: remnawave
+      # Репозиторий, с которым сверяется проверка обновлений (/update).
+      # У форка он свой — иначе баннеры «доступно обновление» показывают
+      # коммиты апстрима, а не вашего образа.
+      UPDATE_REPO: "wuwkos/Bot"
       # Если панель закрыта аддоном «Caddy with security» (docs.rw → Panel security),
       # впишите сюда X-Api-Key из портала — бот добавит его ко всем запросам к панели.
       # CADDY_AUTH_API_TOKEN: ""

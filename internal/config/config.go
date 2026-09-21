@@ -29,6 +29,12 @@ type Config struct {
 	DatabaseURL string
 	SecretKey   string
 
+	// UpdateRepo — репозиторий GitHub (owner/name), с которым сверяется
+	// проверка обновлений: его коммиты показываются в уведомлении, его сборки
+	// ищутся как «последняя версия». У форков он свой: UPDATE_REPO=owner/name.
+	// Пусто — встроенный по умолчанию (репозиторий апстрима).
+	UpdateRepo string
+
 	PremiumEmoji map[string]string
 
 	Commit    string
@@ -64,6 +70,7 @@ func Load() (*Config, error) {
 		DBKind:       strings.TrimSpace(os.Getenv("DB_KIND")),
 		DatabaseURL:  strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		SecretKey:    os.Getenv("SECRET_KEY"),
+		UpdateRepo:   strings.TrimSpace(os.Getenv("UPDATE_REPO")),
 		PremiumEmoji: parseEmojiMap(os.Getenv("PREMIUM_EMOJI")),
 		LogLevel:     strings.TrimSpace(os.Getenv("LOG_LEVEL")),
 	}
