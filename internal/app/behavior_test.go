@@ -184,7 +184,7 @@ func (f *fakeMsg) Delete(_ context.Context, _ int64, id int) {
 	f.deleted = append(f.deleted, id)
 	f.mu.Unlock()
 }
-func (f *fakeMsg) SetUserKeyboard(_ context.Context, _ int64, _ [][]string) {}
+func (f *fakeMsg) SetUserKeyboard(_ context.Context, _ int64, _ [][]string) bool { return true }
 func (f *fakeMsg) SendInvoice(_ context.Context, _ int64, title, _, payload, currency string, amount int) {
 	f.mu.Lock()
 	f.invoices = append(f.invoices, currency+":"+strconv.Itoa(amount)+":"+payload)

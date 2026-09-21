@@ -191,6 +191,7 @@ var en = map[string]string{
 	"rk.vpn":                  "🚀 Connect VPN",
 	"rk.menu":                 "🏠 Main menu",
 	"rk.help":                 "❓ Help",
+	"rk.hint":                 "Menu buttons are below.",
 	"rk.ref":                  "👥 Invite a friend",
 	"rk.info":                 "ℹ️ Info",
 	"btn.trial":               "🎁 Trial subscription",

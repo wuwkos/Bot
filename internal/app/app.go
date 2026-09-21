@@ -52,7 +52,7 @@ type messenger interface {
 	SendBanner(ctx context.Context, chatID int64, photo models.InputFile, caption string, entities []models.MessageEntity, rm models.ReplyMarkup) (int, error)
 	Delete(ctx context.Context, chatID int64, msgID int)
 
-	SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string)
+	SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) bool
 	AnswerCallback(ctx context.Context, id string)
 	EditText(ctx context.Context, chatID int64, msgID int, text string, rows [][]models.InlineKeyboardButton) bool
 	EditCaption(ctx context.Context, chatID int64, msgID int, caption string, rows [][]models.InlineKeyboardButton) bool
@@ -163,6 +163,7 @@ type App struct {
 
 	scrMu         sync.Mutex
 	screen        map[int64][]int
+	kbSet         map[int64]bool
 	editTarget    map[int64]int
 	screenSection map[int64]string
 
@@ -299,7 +300,7 @@ type subCacheEntry struct {
 func New(cfg *config.Config, crypter *crypto.Crypter, log *slog.Logger) *App {
 	return &App{cfg: cfg, crypter: crypter, log: log, ctl: hostctl.New(), wiz: map[int64]*wizard{}, ui: map[int64]*uiState{},
 		bootAt: time.Now(),
-		screen: map[int64][]int{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
+		screen: map[int64][]int{}, kbSet: map[int64]bool{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
 }
 
 func (a *App) Bootstrap(ctx context.Context) error {
@@ -1787,15 +1788,29 @@ func (a *App) ensureUser(ctx context.Context, chatID int64) {
 	}
 }
 
-// ensureHomeKey — постоянные reply-кнопки. Как в FITHOST: клавиатура обычная
-// (не persistent), клиент прячет её штатно — тапом по кнопке или встроенным
-// сворачиванием, — а мы возвращаем её на каждом текстовом сообщении. Отдельной
-// команды скрытия нет. Исключение — оферта: до согласия клавиатуры нет.
+// ensureHomeKey — постоянные reply-кнопки: ставятся один раз за процесс на
+// пользователя (клавиатура persistent — переживает нажатия и живёт у клиента,
+// пока её не свернёт сам пользователь). Носителем идёт короткая подсказка —
+// Telegram не принимает пустой текст. Отдельной команды скрытия нет.
+// Исключение — оферта: до согласия клавиатуры нет.
 func (a *App) ensureHomeKey(ctx context.Context, chatID int64) {
 	if a.legalStartRequired(ctx, chatID) {
 		return
 	}
-	a.msg.SetUserKeyboard(ctx, chatID, userKeyboardLabels(a.lang(chatID)))
+	a.scrMu.Lock()
+	if a.kbSet == nil {
+		a.kbSet = map[int64]bool{}
+	}
+	already := a.kbSet[chatID]
+	a.scrMu.Unlock()
+	if already {
+		return
+	}
+	if a.msg.SetUserKeyboard(ctx, chatID, userKeyboardLabels(a.lang(chatID))) {
+		a.scrMu.Lock()
+		a.kbSet[chatID] = true
+		a.scrMu.Unlock()
+	}
 }
 
 // pricing отдаёт КОПИЮ сетки цен: возвращалась она по значению, но карты внутри
@@ -2165,13 +2180,12 @@ func (m botMessenger) StarTransactions(ctx context.Context, offset, limit int) (
 	return res.Transactions, nil
 }
 
-func (m botMessenger) SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) {
-	// Постоянные reply-кнопки снизу. Reply-клавиатуру Telegram можно прикрепить
-	// только к сообщению — отдельно её не отправить. Сообщение-носитель уходит
-	// пустым и удаляется через пару секунд: клиент успевает получить
-	// клавиатуру, а лишний пузырь в чате не остаётся. Удаление самого
-	// сообщения reply-клавиатуру не снимает — снять её может только
-	// ReplyKeyboardRemove или новая клавиатура.
+func (m botMessenger) SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) bool {
+	// Постоянные reply-кнопки снизу. Reply-клавиатуру Telegram принимает
+	// только ВМЕСТЕ с сообщением, и текст у него обязан быть непустым: пробел
+	// и нулевой пробел панель отвергает («text must be non-empty»). Поэтому
+	// носителем идёт короткая подсказка — и лишь ОДИН раз на пользователя
+	// (см. ensureHomeKey), а не на каждое сообщение.
 	var kb [][]models.KeyboardButton
 	for _, r := range rows {
 		var row []models.KeyboardButton
@@ -2182,26 +2196,22 @@ func (m botMessenger) SetUserKeyboard(ctx context.Context, chatID int64, rows []
 			kb = append(kb, row)
 		}
 	}
-	msg, err := m.b.SendMessage(ctx, &bot.SendMessageParams{
+	_, err := m.b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID: chatID,
-		Text:   " ",
+		Text:   i18n.T("ru", "rk.hint"),
 		ReplyMarkup: models.ReplyKeyboardMarkup{
 			Keyboard:       kb,
 			ResizeKeyboard: true,
+			// Persistent: клавиатура переживает нажатие и остаётся на месте,
+			// пока её не свернёт сам пользователь (штатная кнопка Telegram).
+			IsPersistent: true,
 		},
 	})
 	if err != nil {
 		m.log.Warn("не удалось выставить reply-кнопки", "err", err, "user", chatID)
-		return
+		return false
 	}
-	// Удаляем со своей задержкой и своим контекстом — жизнь апдейта тут ни при
-	// чём: клиент должен успеть доехать до клавиатуры, а задержка уже потом.
-	go func(messageID int) {
-		time.Sleep(3 * time.Second)
-		dctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_, _ = m.b.DeleteMessage(dctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: messageID})
-	}(msg.ID)
+	return true
 }
 
 func (m botMessenger) AnswerCallback(ctx context.Context, id string) {
