@@ -184,7 +184,6 @@ func (f *fakeMsg) Delete(_ context.Context, _ int64, id int) {
 	f.deleted = append(f.deleted, id)
 	f.mu.Unlock()
 }
-func (f *fakeMsg) SetUserKeyboard(_ context.Context, _ int64, _ [][]string) bool { return true }
 func (f *fakeMsg) SendInvoice(_ context.Context, _ int64, title, _, payload, currency string, amount int) {
 	f.mu.Lock()
 	f.invoices = append(f.invoices, currency+":"+strconv.Itoa(amount)+":"+payload)
@@ -2223,11 +2222,14 @@ func TestSingleMessageUI(t *testing.T) {
 		t.Fatalf("после /start должно быть видимое сообщение, live=%d", afterStart)
 	}
 
+	// Приветствие — постоянное: на нём reply-клавиатура, и удалять его нельзя
+	// (клиенты прячут кнопки вместе с сообщением-носителем). Навигация
+	// оставляет ровно один текущий экран ПЛЮС постоянное приветствие.
 	a.handleCallback(ctx, cb(100, "menu:manage"))
 
 	a.handleCallback(ctx, cb(100, "menu:home"))
-	if got := fm.liveCount(); got != afterStart {
-		t.Fatalf("на экране должно оставаться только текущее (%d), а живых=%d; deleted=%v", afterStart, got, fm.deleted)
+	if got := fm.liveCount(); got != afterStart+1 {
+		t.Fatalf("должно оставаться приветствие + текущий экран (%d), а живых=%d; deleted=%v", afterStart+1, got, fm.deleted)
 	}
 	if len(fm.deleted) == 0 {
 		t.Fatal("предыдущие экраны должны были удаляться")

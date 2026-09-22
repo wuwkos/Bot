@@ -275,6 +275,9 @@ func (a *App) legalGateOrAsk(ctx context.Context, chatID int64) bool {
 	// Иначе человек, бросивший хаб на экране согласия и ушедший покупать,
 	// после «Принимаю» уехал бы не на оплату, а назад в хаб.
 	a.getUI(chatID).pendingLegalBack = ""
+	// Гейт покупки перехватил поток — «стартовый» сбрасываем: после «Принимаю»
+	// человек должен попасть на витрину, а не в приветствие.
+	a.getUI(chatID).pendingLegalHome = false
 	a.askLegal(ctx, chatID)
 	return true
 }
@@ -287,6 +290,9 @@ func (a *App) legalGateBack(ctx context.Context, chatID int64, back string) bool
 		return false
 	}
 	a.getUI(chatID).pendingLegalBack = back
+	// Гейт «вернуться к действию» перехватил поток — «стартовый» сбрасываем,
+	// иначе после «Принимаю» fromStart уводил бы в приветствие вместо VPN/триала.
+	a.getUI(chatID).pendingLegalHome = false
 	a.askLegal(ctx, chatID)
 	return true
 }
@@ -303,7 +309,7 @@ func (a *App) askLegal(ctx context.Context, chatID int64) {
 	}
 	// Вход в бота — короткая оферта в одну кнопку: новичок подтверждает
 	// согласие нажатием «Продолжить», полный разбор документов ему не нужен.
-	// Покупательский гейт ниже показывает развёрнутый экран как раньше.
+	// Покупательский гейт и гейты VPN/триала показывают развёрнутый экран.
 	if a.getUI(chatID).pendingLegalHome {
 		a.sendKB(ctx, chatID, i18n.T(lang, "legal.start_offer"), [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "legal.btn_continue"), "terms:accept")},
@@ -463,15 +469,9 @@ func (a *App) onTerms(ctx context.Context, chatID int64, val, firstName, usernam
 			a.openPlanLink(ctx, chatID, code)
 			return
 		}
-		// Согласие на входе ведёт на стартовое сообщение: оферта показана один
-		// раз и уже записана, а знакомство с ботом начинается с приветствия —
-		// меню человек откроет кнопкой «Подключить VPN» или «Главное меню».
-		if fromStart {
-			a.showGreeting(ctx, chatID, displayName(firstName, username))
-			return
-		}
 		// Согласие спросили посреди действия (хаб VPN, триал) — возвращаем
-		// туда, откуда человек пришёл, а не на витрину.
+		// туда, откуда человек пришёл, а не на витрину. Проверяем раньше
+		// fromStart: если гейт «вернуться» перехватил поток, это его маршрут.
 		if back := ui.pendingLegalBack; back != "" {
 			ui.pendingLegalBack = ""
 			switch back {
@@ -482,6 +482,13 @@ func (a *App) onTerms(ctx context.Context, chatID int64, val, firstName, usernam
 				a.activateTrial(ctx, chatID)
 				return
 			}
+		}
+		// Согласие на входе ведёт на стартовое сообщение: оферта показана один
+		// раз и уже записана, а знакомство с ботом начинается с приветствия —
+		// меню человек откроет кнопкой «Подключить VPN» или «Главное меню».
+		if fromStart {
+			a.showGreeting(ctx, chatID, displayName(firstName, username))
+			return
 		}
 		a.showPlans(ctx, chatID)
 	case val == "decline":

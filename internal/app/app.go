@@ -52,7 +52,6 @@ type messenger interface {
 	SendBanner(ctx context.Context, chatID int64, photo models.InputFile, caption string, entities []models.MessageEntity, rm models.ReplyMarkup) (int, error)
 	Delete(ctx context.Context, chatID int64, msgID int)
 
-	SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) bool
 	AnswerCallback(ctx context.Context, id string)
 	EditText(ctx context.Context, chatID int64, msgID int, text string, rows [][]models.InlineKeyboardButton) bool
 	EditCaption(ctx context.Context, chatID int64, msgID int, caption string, rows [][]models.InlineKeyboardButton) bool
@@ -163,7 +162,6 @@ type App struct {
 
 	scrMu         sync.Mutex
 	screen        map[int64][]int
-	kbSet         map[int64]bool
 	editTarget    map[int64]int
 	screenSection map[int64]string
 
@@ -300,7 +298,7 @@ type subCacheEntry struct {
 func New(cfg *config.Config, crypter *crypto.Crypter, log *slog.Logger) *App {
 	return &App{cfg: cfg, crypter: crypter, log: log, ctl: hostctl.New(), wiz: map[int64]*wizard{}, ui: map[int64]*uiState{},
 		bootAt: time.Now(),
-		screen: map[int64][]int{}, kbSet: map[int64]bool{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
+		screen: map[int64][]int{}, editTarget: map[int64]int{}, screenSection: map[int64]string{}}
 }
 
 func (a *App) Bootstrap(ctx context.Context) error {
@@ -752,13 +750,6 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 	}
 	if a.denyAccess(ctx, chatID, isAdmin) {
 		return
-	}
-
-	// Reply-кнопки возвращаются на каждое текстовое сообщение: клиент прячет
-	// клавиатуру штатно (тап по кнопке / встроенное сворачивание), а бот
-	// ставит её заново. На оферте ensureHomeKey сам не сработает (гейт).
-	if !isAdmin && a.installed() {
-		a.ensureHomeKey(ctx, chatID)
 	}
 
 	if strings.HasPrefix(text, "/") {
@@ -1426,30 +1417,44 @@ func (a *App) sendKBParts(ctx context.Context, chatID int64, parts []string, row
 // — иначе бот остаётся «мёртвым» до вмешательства администратора.
 func (a *App) sendBanner(ctx context.Context, chatID int64, photo models.InputFile, caption string, ents []models.MessageEntity, rm models.ReplyMarkup) {
 	a.emit(ctx, chatID, func() int {
-		id, err := a.msg.SendBanner(ctx, chatID, photo, caption, ents, rm)
-		if id != 0 {
-			a.noteBannerOK(photo)
-			return id
-		}
-		// Настройку снимаем ТОЛЬКО когда Telegram отверг саму картинку:
-		// сетевой сбой или заблокировавший бота пользователь не повод стирать
-		// баннер у всех.
-		a.dropBrokenWelcomeImage(ctx, photo, photoErrKind(err))
-		fallback := &models.InputFileUpload{Filename: "welcome.jpg", Data: bytes.NewReader(defaultBanner)}
-		if id, _ := a.msg.SendBanner(ctx, chatID, fallback, caption, ents, rm); id != 0 {
-			return id
-		}
-		// Не принялась и картинка по умолчанию (например, подпись длиннее
-		// лимита) — экран уходит текстом: кнопки важнее оформления.
-		rows := [][]models.InlineKeyboardButton(nil)
-		if kb, ok := rm.(models.InlineKeyboardMarkup); ok {
-			rows = kb.InlineKeyboard
-		}
-		if len(ents) > 0 {
-			return a.msg.SendEnt(ctx, chatID, caption, ents, rows)
-		}
-		return a.msg.SendKB(ctx, chatID, caption, rows)
+		return a.sendBannerImpl(ctx, chatID, photo, caption, ents, rm)
 	})
+}
+
+// sendBannerKeep — баннер, который НЕ считается «экраном» и не удаляется при
+// навигации. Им служит приветствие: оно несёт reply-клавиатуру, а некоторые
+// клиенты прячут кнопки вместе с удалённым сообщением-носителем — удалить
+// приветствие значит снять reply-кнопки.
+func (a *App) sendBannerKeep(ctx context.Context, chatID int64, photo models.InputFile, caption string, ents []models.MessageEntity, rm models.ReplyMarkup) {
+	a.sendBannerImpl(ctx, chatID, photo, caption, ents, rm)
+}
+
+// sendBannerImpl — сама отправка баннера с фолбэками на битую картинку и на
+// текст. Возвращает id отправленного сообщения.
+func (a *App) sendBannerImpl(ctx context.Context, chatID int64, photo models.InputFile, caption string, ents []models.MessageEntity, rm models.ReplyMarkup) int {
+	id, err := a.msg.SendBanner(ctx, chatID, photo, caption, ents, rm)
+	if id != 0 {
+		a.noteBannerOK(photo)
+		return id
+	}
+	// Настройку снимаем ТОЛЬКО когда Telegram отверг саму картинку:
+	// сетевой сбой или заблокировавший бота пользователь не повод стирать
+	// баннер у всех.
+	a.dropBrokenWelcomeImage(ctx, photo, photoErrKind(err))
+	fallback := &models.InputFileUpload{Filename: "welcome.jpg", Data: bytes.NewReader(defaultBanner)}
+	if id, _ := a.msg.SendBanner(ctx, chatID, fallback, caption, ents, rm); id != 0 {
+		return id
+	}
+	// Не принялась и картинка по умолчанию (например, подпись длиннее
+	// лимита) — экран уходит текстом: кнопки важнее оформления.
+	rows := [][]models.InlineKeyboardButton(nil)
+	if kb, ok := rm.(models.InlineKeyboardMarkup); ok {
+		rows = kb.InlineKeyboard
+	}
+	if len(ents) > 0 {
+		return a.msg.SendEnt(ctx, chatID, caption, ents, rows)
+	}
+	return a.msg.SendKB(ctx, chatID, caption, rows)
 }
 
 // photoErrKind разбирает отказ Telegram на картинке:
@@ -1699,7 +1704,6 @@ func (a *App) enterHome(ctx context.Context, chatID int64, isAdmin bool, firstNa
 	}
 	if a.store != nil {
 		if u, _ := a.store.GetUser(ctx, chatID); u == nil {
-			a.ensureHomeKey(ctx, chatID)
 			a.registerUser(ctx, chatID, firstName, username)
 			return
 		}
@@ -1707,7 +1711,6 @@ func (a *App) enterHome(ctx context.Context, chatID int64, isAdmin bool, firstNa
 	// Согласие на входе: оператор включил показ документов при первом входе, а
 	// человек их ещё не принял — меню он увидит после «Принимаю».
 	if a.legalStartRequired(ctx, chatID) {
-		a.ensureHomeKey(ctx, chatID)
 		a.getUI(chatID).pendingLegalHome = true
 		a.askLegal(ctx, chatID)
 		return
@@ -1785,31 +1788,6 @@ func (a *App) ensureUser(ctx context.Context, chatID int64) {
 	}
 	if u, _ := a.store.GetUser(ctx, chatID); u == nil {
 		_ = a.store.UpsertUser(ctx, chatID)
-	}
-}
-
-// ensureHomeKey — постоянные reply-кнопки: ставятся один раз за процесс на
-// пользователя (клавиатура persistent — переживает нажатия и живёт у клиента,
-// пока её не свернёт сам пользователь). Носителем идёт короткая подсказка —
-// Telegram не принимает пустой текст. Отдельной команды скрытия нет.
-// Исключение — оферта: до согласия клавиатуры нет.
-func (a *App) ensureHomeKey(ctx context.Context, chatID int64) {
-	if a.legalStartRequired(ctx, chatID) {
-		return
-	}
-	a.scrMu.Lock()
-	if a.kbSet == nil {
-		a.kbSet = map[int64]bool{}
-	}
-	already := a.kbSet[chatID]
-	a.scrMu.Unlock()
-	if already {
-		return
-	}
-	if a.msg.SetUserKeyboard(ctx, chatID, userKeyboardLabels(a.lang(chatID))) {
-		a.scrMu.Lock()
-		a.kbSet[chatID] = true
-		a.scrMu.Unlock()
 	}
 }
 
@@ -2178,40 +2156,6 @@ func (m botMessenger) StarTransactions(ctx context.Context, offset, limit int) (
 		return nil, nil
 	}
 	return res.Transactions, nil
-}
-
-func (m botMessenger) SetUserKeyboard(ctx context.Context, chatID int64, rows [][]string) bool {
-	// Постоянные reply-кнопки снизу. Reply-клавиатуру Telegram принимает
-	// только ВМЕСТЕ с сообщением, и текст у него обязан быть непустым: пробел
-	// и нулевой пробел панель отвергает («text must be non-empty»). Поэтому
-	// носителем идёт короткая подсказка — и лишь ОДИН раз на пользователя
-	// (см. ensureHomeKey), а не на каждое сообщение.
-	var kb [][]models.KeyboardButton
-	for _, r := range rows {
-		var row []models.KeyboardButton
-		for _, b := range r {
-			row = append(row, models.KeyboardButton{Text: b})
-		}
-		if len(row) > 0 {
-			kb = append(kb, row)
-		}
-	}
-	_, err := m.b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: chatID,
-		Text:   i18n.T("ru", "rk.hint"),
-		ReplyMarkup: models.ReplyKeyboardMarkup{
-			Keyboard:       kb,
-			ResizeKeyboard: true,
-			// Persistent: клавиатура переживает нажатие и остаётся на месте,
-			// пока её не свернёт сам пользователь (штатная кнопка Telegram).
-			IsPersistent: true,
-		},
-	})
-	if err != nil {
-		m.log.Warn("не удалось выставить reply-кнопки", "err", err, "user", chatID)
-		return false
-	}
-	return true
 }
 
 func (m botMessenger) AnswerCallback(ctx context.Context, id string) {

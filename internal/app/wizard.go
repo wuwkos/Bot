@@ -131,6 +131,8 @@ func (a *App) handleCallback(ctx context.Context, cq *models.CallbackQuery) {
 	if a.denyAccess(ctx, chatID, isAdmin) {
 		return
 	}
+	// Reply-кнопки ставятся на баннере приветствия (см. showGreeting):
+	// отдельная переотправка на каждый тап не нужна — клавиатура persistent.
 	key, val, _ := strings.Cut(cq.Data, ":")
 
 	switch key {

@@ -167,6 +167,25 @@ func userKeyboardLabels(lang string) [][]string {
 	}
 }
 
+// userReplyMarkup — постоянные reply-кнопки как Telegram-разметка. Крепится к
+// баннеру приветствия: persistent, переживает нажатия, скрывается штатным
+// сворачиванием клиента. Кнопки всегда одни и те же, независимо от экрана.
+func userReplyMarkup(lang string) models.ReplyKeyboardMarkup {
+	var kb [][]models.KeyboardButton
+	for _, r := range userKeyboardLabels(lang) {
+		var row []models.KeyboardButton
+		for _, b := range r {
+			row = append(row, models.KeyboardButton{Text: b})
+		}
+		kb = append(kb, row)
+	}
+	return models.ReplyKeyboardMarkup{
+		Keyboard:       kb,
+		ResizeKeyboard: true,
+		IsPersistent:   true,
+	}
+}
+
 // Состояния подписки для экранов.
 const (
 	subStNone    = 0 // панель не знает такого пользователя
@@ -230,22 +249,20 @@ func subDaysLeft(expireAt string) int {
 	return daysUntil(t, time.Now().UTC())
 }
 
-// showGreeting — экран /start: приветствие + кнопка подключения и канал.
+// showGreeting — экран /start: приветствие с reply-кнопками.
+//
+// Reply-клавиатура крепится прямо к баннеру приветствия — отдельного
+// сообщения-носителя нет, а баннер НЕ удаляется при навигации (sendBannerKeep):
+// некоторые клиенты прячут reply-кнопки вместе с удалённым сообщением.
 func (a *App) showGreeting(ctx context.Context, chatID int64, name string) {
-	a.ensureHomeKey(ctx, chatID)
 	photo, caption, ents := a.welcomeContent(name)
 	lang := a.lang(chatID)
-	rows := [][]models.InlineKeyboardButton{
-		{btn(i18n.T(lang, "btn.connect"), "menu:vpn")},
-		a.channelRow(lang),
-	}
-	a.sendBanner(ctx, chatID, photo, caption, ents, models.InlineKeyboardMarkup{InlineKeyboard: rows})
+	a.sendBannerKeep(ctx, chatID, photo, caption, ents, userReplyMarkup(lang))
 }
 
 // showUserMenu — экран /menu: ID, статус подписки, кнопки разделов.
 func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
-	a.ensureHomeKey(ctx, chatID)
 	var status string
 	switch st, expire, _, reason := a.subStateFor(ctx, chatID); st {
 	case subStActive:
@@ -374,7 +391,6 @@ func (a *App) subStateFor(ctx context.Context, chatID int64) (int, string, strin
 // платящего клиента оплатить второй раз).
 func (a *App) showVPN(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
-	a.ensureHomeKey(ctx, chatID)
 	// Возвратный гейт: после «Принимаю» человек должен увидеть хаб, а не
 	// витрину — он ничего не покупал, он подключался.
 	if a.legalGateBack(ctx, chatID, "vpn") {
@@ -449,7 +465,6 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 // showInfo — экран «Помощь»: контакт поддержки и оферта ссылкой.
 func (a *App) showInfo(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
-	a.ensureHomeKey(ctx, chatID)
 	a.mu.Lock()
 	support := ""
 	if a.botCfg != nil {
@@ -653,7 +668,7 @@ func (a *App) showServiceName(ctx context.Context, chatID int64) {
 	}
 	body := i18n.T(lang, "svc.title") +
 		i18n.T(lang, "svc.current", html.EscapeString(a.serviceNameDisplay(lang))) +
-		i18n.T(lang, "svc.hint", i18n.T(lang, "brand.default"))
+		i18n.T(lang, "svc.hint", a.serviceNameDisplay(lang))
 	a.sendIfaceKB(ctx, chatID, body, rows)
 }
 
@@ -944,7 +959,6 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 }
 
 func (a *App) showMenu(ctx context.Context, chatID int64, isAdmin bool, name string) {
-	a.ensureHomeKey(ctx, chatID)
 	// Гейт согласия на входе стоит здесь, а не только в enterHome: в меню
 	// ведёт и кнопка «🏠 На главную» с любого экрана, включая сами документы.
 	if !isAdmin && a.legalStartRequired(ctx, chatID) {
