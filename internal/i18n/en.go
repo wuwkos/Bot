@@ -185,6 +185,7 @@ var en = map[string]string{
 	"admin.input_lost":        "🤔 I am not waiting for any text right now. If this was an answer to an input prompt, the prompt did not survive a bot restart — open that screen again.",
 	"input.not_expected":      "🤔 I am not expecting any text right now. Please use the buttons below.",
 	"menu.welcome":            "🔒 <b>Hi, %s!</b>\n\n<b>%s</b> — a fast and reliable VPN with no traffic limits and no logs.\n\n⚡️ Speeds up to 1 Gbps\n🌍 Servers in 10+ countries\n📱 Phone, PC and router\n🔓 Whitelist-bypass mode available\n\nConnect in a couple of taps 👇",
+	"menu.welcome_no_csqtt":   "🔒 <b>Hi, %s!</b>\n\n<b>%s</b> — a fast and reliable VPN with no traffic limits and no logs.\n\n⚡️ Speeds up to 1 Gbps\n🌍 Servers in 10+ countries\n📱 Phone, PC and router\n\nConnect in a couple of taps 👇",
 	"btn.buy":                 "💳 Buy",
 	"btn.connect":             "🚀 Connect VPN",
 	"btn.tariffs":             "🛒 Extend / Buy subscription",

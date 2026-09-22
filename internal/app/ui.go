@@ -959,7 +959,13 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		caption = i18n.T(lang, "menu.welcome", name, a.brandName(lang))
+		// Строка про обход белых списков — только если выдача CSQTT включена
+		// и настроена: иначе она вводит в заблуждение.
+		key := "menu.welcome_no_csqtt"
+		if a.csqttEnabled() {
+			key = "menu.welcome"
+		}
+		caption = i18n.T(lang, key, name, a.brandName(lang))
 	} else if len(w.Entities) > 0 {
 		_ = json.Unmarshal(w.Entities, &ents)
 	}

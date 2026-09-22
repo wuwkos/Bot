@@ -45,7 +45,7 @@ var AllSections = []Section{
 	{SectionWizardCookie, "🍪 Шаг: nginx-кука", "🍪 Step: nginx cookie"},
 	{SectionWizardVerifyOK, "✅ Шаг: проверка успешна", "✅ Step: verify OK"},
 
-	{SectionMainMenu, "🏠 Меню «Интерфейс»", "🏠 Menu «Interface»"},
+	{SectionMainMenu, "🏠 Главное меню", "🏠 Main menu"},
 	{SectionBuySubscription, "🛒 Купить / Оплата", "🛒 Buy / Payments menu"},
 	{SectionMySubscription, "📦 Мои подписки", "📦 My subscriptions"},
 	{SectionTrial, "🎁 Триал", "🎁 Trial"},
@@ -55,6 +55,7 @@ var AllSections = []Section{
 }
 
 var userFacingSections = map[string]bool{
+	SectionMainMenu:        true,
 	SectionBuySubscription: true,
 	SectionMySubscription:  true,
 }
