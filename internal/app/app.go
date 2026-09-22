@@ -765,8 +765,15 @@ func (a *App) handleMessage(ctx context.Context, m *models.Message) {
 		a.enterHome(ctx, chatID, isAdmin, firstName, username)
 		return
 	}
-	if a.installed() && a.routeUserCommand(ctx, chatID, userCommandKey(text), isAdmin, firstName, username) {
-		return
+	if a.installed() {
+		if key := userCommandKey(text); key != "" {
+			// Тап по reply-кнопке (или дубль команды текстом): сам текст-тап в
+			// чате не нужен — остаётся только экран-ответ. Тексты с "/" уже
+			// удалены выше, повторный delete по ним безвреден.
+			a.msg.Delete(ctx, chatID, m.ID)
+			a.routeUserCommand(ctx, chatID, key, isAdmin, firstName, username)
+			return
+		}
 	}
 
 	switch {

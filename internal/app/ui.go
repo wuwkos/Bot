@@ -415,9 +415,13 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 		}
 		rows = [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
-			{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
-			{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
 		}
+		// Обход белых списков — только если выдача включена и настроена в
+		// админке. Иначе кнопки нет вообще (не заглушка).
+		if a.csqttEnabled() {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
+		}
+		rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.renew"), "menu:renew")})
 	case subStDead:
 		// Просроченная, исчерпанная или заблокированная подписка — НЕ активна.
 		// Ссылку не показываем (не работает), первое действие — продление;
@@ -435,14 +439,18 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 			rows = [][]models.InlineKeyboardButton{
 				{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
 				{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
-				{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
+			}
+			if a.csqttEnabled() {
+				rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
 			}
 		}
 	case subStUnknown:
 		head = title + "\n" + i18n.T(lang, "vpn.status_unknown")
 		rows = [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
-			{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")},
+		}
+		if a.csqttEnabled() {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
 		}
 	default:
 		if a.trialAvailable(ctx, chatID) {

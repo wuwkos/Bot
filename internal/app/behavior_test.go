@@ -2352,15 +2352,48 @@ func TestVPNHub(t *testing.T) {
 		t.Fatalf("без подписки и триала — только покупка, получено %q", got)
 	}
 
-	// Активная подписка: подключение, белые списки, продление.
+	// Активная подписка: подключение и продление. Белых списков здесь нет —
+	// CSQTT в этом тесте не настроен (см. TestVPNHub_WhitelistButton ниже).
 	hasSub = true
 	before = len(fm.allCallbackData())
 	a.showVPN(ctx, user)
 	if !strings.Contains(fm.last(), "Активен") || !strings.Contains(fm.last(), "До окончания") {
 		t.Fatalf("активная подписка должна показывать статус и срок: %q", fm.last())
 	}
-	if got := since(before); got != "menu:mysubs|menu:csqtt|menu:renew|menu:home" {
+	if got := since(before); got != "menu:mysubs|menu:renew|menu:home" {
 		t.Fatalf("активный набор кнопок, получено %q", got)
+	}
+}
+
+// Кнопка «Обход белых списков» в хабе /vpn есть только при включённой и
+// настроенной в админке выдаче CSQTT — иначе её нет вообще, не заглушка.
+func TestVPNHub_WhitelistButton(t *testing.T) {
+	a, fm, fs := newTestApp(t)
+	a.store = fs
+	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
+	ctx := context.Background()
+	const user int64 = 555
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/by-telegram-id/") {
+			_, _ = w.Write([]byte(`{"response":[{"uuid":"u1","subscriptionUrl":"https://sub/abc","expireAt":"2030-01-01T00:00:00Z","status":"ACTIVE"}]}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	a.panel = remnawave.New(model.PanelConfig{Mode: model.ModeRemote, BaseURL: srv.URL, APIToken: "t"})
+
+	a.showVPN(ctx, user)
+	if hasCB(fm.allCallbackData(), "menu:csqtt") {
+		t.Fatal("CSQTT не настроен, а кнопка белых списков показана")
+	}
+
+	a.botCfg.CSQTT = model.CSQTTConfig{Enabled: true, BaseURL: "https://csqtt.example.com", User: "u", Pass: "p"}
+	before := len(fm.allCallbackData())
+	a.showVPN(ctx, user)
+	if !hasCB(fm.allCallbackData()[before:], "menu:csqtt") {
+		t.Fatal("CSQTT включён, а кнопки белых списков нет")
 	}
 }
 
@@ -2405,7 +2438,7 @@ func TestVPN_ExpiredSubNotActive(t *testing.T) {
 	before := len(fm.allCallbackData())
 	a.showVPN(ctx, user)
 	check("VPN")
-	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:renew|menu:mysubs|menu:csqtt|menu:home" {
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:renew|menu:mysubs|menu:home" {
 		t.Fatalf("на истёкшей подписке первое действие — продление, получено %q", got)
 	}
 
@@ -2612,7 +2645,7 @@ func TestStarsFlow(t *testing.T) {
 	// продление.
 	before := len(fm.allCallbackData())
 	a.showVPN(ctx, user)
-	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:mysubs|menu:csqtt|menu:renew|menu:home" {
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:mysubs|menu:renew|menu:home" {
 		t.Fatalf("после Stars-оплаты экран /vpn не тот: %q", got)
 	}
 }
@@ -2960,6 +2993,33 @@ func TestReplyKeyboard_AllButtonsRouted(t *testing.T) {
 	for _, old := range []string{"👥 Пригласить друга", "ℹ️ Информация"} {
 		if userCommandKey(old) == "" {
 			t.Fatalf("старая кнопка %q перестала разбираться", old)
+		}
+	}
+}
+
+// Тап по reply-кнопке удаляется из чата: текст-тап в переписке не нужен,
+// остаётся только экран-ответ.
+func TestReplyTapMessageDeleted(t *testing.T) {
+	ctx := context.Background()
+	a, _, fs := newTestApp(t)
+	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
+	const user int64 = 555
+	_ = fs.UpsertUser(ctx, user)
+
+	for _, text := range []string{"🚀 Подключить VPN", "🏠 Главное меню", "❓ Помощь"} {
+		fm := &fakeMsg{}
+		a.msg = fm
+		m := msgText(user, text)
+		m.ID = int(text[0])
+		a.handleMessage(ctx, m)
+		found := false
+		for _, id := range fm.deleted {
+			if id == m.ID {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("тап %q не удалён: %v", text, fm.deleted)
 		}
 	}
 }
