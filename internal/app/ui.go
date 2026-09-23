@@ -485,9 +485,9 @@ func (a *App) showInfo(ctx context.Context, chatID int64) {
 	}
 	text := i18n.T(lang, "info.title") + "\n\n" + supportLine
 	var rows [][]models.InlineKeyboardButton
-	if u := a.legalCfg().Terms.URL; u != "" {
-		rows = append(rows, []models.InlineKeyboardButton{{Text: i18n.T(lang, "info.offer"), URL: u}})
-	}
+	// Оба документа из конфига: текстовые открываются в боте, со ссылкой —
+	// ведут на страницу. Что не задано, того нет.
+	rows = append(rows, legalDocRows(lang, a.legalCfg().Docs())...)
 	rows = append(rows, a.contactRows()...)
 	rows = append(rows, homeRow(lang))
 	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, text, rows)
