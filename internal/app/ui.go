@@ -416,7 +416,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 		rows = [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
 		}
-		// Обход белых списков — только если выдача включена и настроена в
+		// Кнопка режима CSQTT — только если выдача включена и настроена в
 		// админке. Иначе кнопки нет вообще (не заглушка).
 		if a.csqttEnabled() {
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
@@ -959,8 +959,8 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		// Строка про обход белых списков — только если выдача CSQTT включена
-		// и настроена: иначе она вводит в заблуждение.
+		// Текст приветствия зависит от выдачи CSQTT: иначе строка про неё
+		// вводит в заблуждение.
 		key := "menu.welcome_no_csqtt"
 		if a.csqttEnabled() {
 			key = "menu.welcome"
