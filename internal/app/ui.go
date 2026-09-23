@@ -212,6 +212,49 @@ func subDeadReason(status, expireAt string) string {
 	return ""
 }
 
+// payMethodsLine — строка «Способы оплаты: …» для главного меню: какие способы
+// включены в настройках бота. Пусто — строка не показывается вообще.
+func (a *App) payMethodsLine(lang string) string {
+	a.mu.Lock()
+	var p2pOn, starsOn, ykOn, cbOn, plOn, hlOn, trbOn bool
+	if a.botCfg != nil {
+		p2pOn = a.botCfg.P2P.Enabled
+		starsOn = a.botCfg.Stars.Enabled
+		ykOn = a.botCfg.YooKassa.Enabled
+		cbOn = a.botCfg.CryptoBot.Enabled
+		plOn = a.botCfg.Platega.Enabled
+		hlOn = a.botCfg.Heleket.Enabled
+		trbOn = a.botCfg.Tribute.Enabled
+	}
+	a.mu.Unlock()
+	var names []string
+	if p2pOn {
+		names = append(names, i18n.T(lang, "paym.p2p"))
+	}
+	if starsOn {
+		names = append(names, i18n.T(lang, "paym.stars"))
+	}
+	if ykOn {
+		names = append(names, i18n.T(lang, "paym.yk"))
+	}
+	if cbOn {
+		names = append(names, i18n.T(lang, "paym.cb"))
+	}
+	if plOn {
+		names = append(names, i18n.T(lang, "paym.pl"))
+	}
+	if hlOn {
+		names = append(names, i18n.T(lang, "paym.hl"))
+	}
+	if trbOn {
+		names = append(names, i18n.T(lang, "paym.trb"))
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return i18n.T(lang, "umenu.pay", strings.Join(names, ", "))
+}
+
 // vpnSubState — состояние подписки: найдена ли, жива ли, срок, ссылка и
 // причина «мертва». Живой считается только незаблокированная подписка с
 // неистёкшим сроком: раньше экран показывал «🟢 Активен» всем, кого панель
@@ -300,7 +343,7 @@ func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 	if row := a.legalMenuRow(lang); row != nil {
 		rows = append(rows, row)
 	}
-	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status), rows)
+	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status)+a.payMethodsLine(lang), rows)
 }
 
 // channelRow — кнопка «Наш канал»: ссылка из админки, а если канал не задан —
