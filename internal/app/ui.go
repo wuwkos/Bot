@@ -212,49 +212,6 @@ func subDeadReason(status, expireAt string) string {
 	return ""
 }
 
-// payMethodsLine — строка «Способы оплаты: …» для главного меню: какие способы
-// включены в настройках бота. Пусто — строка не показывается вообще.
-func (a *App) payMethodsLine(lang string) string {
-	a.mu.Lock()
-	var p2pOn, starsOn, ykOn, cbOn, plOn, hlOn, trbOn bool
-	if a.botCfg != nil {
-		p2pOn = a.botCfg.P2P.Enabled
-		starsOn = a.botCfg.Stars.Enabled
-		ykOn = a.botCfg.YooKassa.Enabled
-		cbOn = a.botCfg.CryptoBot.Enabled
-		plOn = a.botCfg.Platega.Enabled
-		hlOn = a.botCfg.Heleket.Enabled
-		trbOn = a.botCfg.Tribute.Enabled
-	}
-	a.mu.Unlock()
-	var names []string
-	if p2pOn {
-		names = append(names, i18n.T(lang, "paym.p2p"))
-	}
-	if starsOn {
-		names = append(names, i18n.T(lang, "paym.stars"))
-	}
-	if ykOn {
-		names = append(names, i18n.T(lang, "paym.yk"))
-	}
-	if cbOn {
-		names = append(names, i18n.T(lang, "paym.cb"))
-	}
-	if plOn {
-		names = append(names, i18n.T(lang, "paym.pl"))
-	}
-	if hlOn {
-		names = append(names, i18n.T(lang, "paym.hl"))
-	}
-	if trbOn {
-		names = append(names, i18n.T(lang, "paym.trb"))
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	return i18n.T(lang, "umenu.pay", strings.Join(names, ", "))
-}
-
 // vpnSubState — состояние подписки: найдена ли, жива ли, срок, ссылка и
 // причина «мертва». Живой считается только незаблокированная подписка с
 // неистёкшим сроком: раньше экран показывал «🟢 Активен» всем, кого панель
@@ -343,7 +300,7 @@ func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 	if row := a.legalMenuRow(lang); row != nil {
 		rows = append(rows, row)
 	}
-	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status)+a.payMethodsLine(lang), rows)
+	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status), rows)
 }
 
 // channelRow — кнопка «Наш канал»: ссылка из админки, а если канал не задан —
@@ -459,7 +416,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 		rows = [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
 		}
-		// Кнопка режима CSQTT — только если выдача включена и настроена в
+		// Обход белых списков — только если выдача включена и настроена в
 		// админке. Иначе кнопки нет вообще (не заглушка).
 		if a.csqttEnabled() {
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
@@ -498,8 +455,14 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 	default:
 		if a.trialAvailable(ctx, chatID) {
 			head = title + "\n" + i18n.T(lang, "vpn.status_new") + "\n" + i18n.T(lang, "vpn.try_free")
+			// Триал через мини-апп: web_app-кнопку десктоп красит в акцентный
+			// (зелёный) цвет. Без мини-аппа — обычная callback-кнопка.
+			trialRow := []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_try"), "menu:trial")}
+			if wa := a.trialWebAppRow(lang); wa != nil {
+				trialRow = wa
+			}
 			rows = [][]models.InlineKeyboardButton{
-				{btn(i18n.T(lang, "vpn.btn_try"), "menu:trial")},
+				trialRow,
 				{btn(i18n.T(lang, "vpn.btn_buy_sub"), "menu:buy")},
 			}
 		} else {
@@ -528,9 +491,9 @@ func (a *App) showInfo(ctx context.Context, chatID int64) {
 	}
 	text := i18n.T(lang, "info.title") + "\n\n" + supportLine
 	var rows [][]models.InlineKeyboardButton
-	// Оба документа из конфига: текстовые открываются в боте, со ссылкой —
-	// ведут на страницу. Что не задано, того нет.
-	rows = append(rows, legalDocRows(lang, a.legalCfg().Docs())...)
+	if u := a.legalCfg().Terms.URL; u != "" {
+		rows = append(rows, []models.InlineKeyboardButton{{Text: i18n.T(lang, "info.offer"), URL: u}})
+	}
 	rows = append(rows, a.contactRows()...)
 	rows = append(rows, homeRow(lang))
 	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, text, rows)
@@ -1002,8 +965,8 @@ func (a *App) welcomeContent(name string) (models.InputFile, string, []models.Me
 	caption := w.Text
 	var ents []models.MessageEntity
 	if caption == "" {
-		// Текст приветствия зависит от выдачи CSQTT: иначе строка про неё
-		// вводит в заблуждение.
+		// Строка про обход белых списков — только если выдача CSQTT включена
+		// и настроена: иначе она вводит в заблуждение.
 		key := "menu.welcome_no_csqtt"
 		if a.csqttEnabled() {
 			key = "menu.welcome"

@@ -75,8 +75,8 @@ func TestLegal_StartGate(t *testing.T) {
 	}
 
 	a.handleMessage(ctx, msgText(uid, "/start"))
-	if !strings.Contains(fm.last(), "Пользовательское соглашение") {
-		t.Fatalf("на входе должны показать документы: %q", fm.last())
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
+		t.Fatalf("на входе должны показать оферту: %q", fm.last())
 	}
 	if !hasCB(fm.allCallbackData(), "terms:accept") {
 		t.Fatalf("нет кнопки согласия: %v", fm.allCallbackData())
@@ -293,12 +293,12 @@ func TestLegal_StartGateHoldsHomeButton(t *testing.T) {
 
 	a.handleMessage(ctx, msgText(uid, "/start"))
 	a.handleCallback(ctx, cb(uid, "menu:home"))
-	if !strings.Contains(fm.last(), "Пользовательское соглашение") {
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
 		t.Fatalf("«На главную» не должна пускать в меню без согласия: %q", fm.last())
 	}
 	a.handleCallback(ctx, cb(uid, "terms:accept"))
 	a.handleCallback(ctx, cb(uid, "menu:home"))
-	if strings.Contains(fm.last(), "Пользовательское соглашение") {
+	if strings.Contains(strings.ToLower(fm.last()), "оферт") {
 		t.Fatalf("после согласия меню должно открываться: %q", fm.last())
 	}
 }
@@ -534,8 +534,8 @@ func TestLegal_FirstStartShowsOfferOnce(t *testing.T) {
 	a.botCfg.Legal = model.LegalConfig{Terms: model.LegalDoc{Text: "правила сервиса"}, GateStart: true}
 
 	a.handleMessage(ctx, msgText(uid, "/start"))
-	if !strings.Contains(fm.last(), "Пользовательское соглашение") {
-		t.Fatalf("первый /start должен показать документы: %q", fm.last())
+	if !strings.Contains(strings.ToLower(fm.last()), "оферт") {
+		t.Fatalf("первый /start должен показать оферту: %q", fm.last())
 	}
 	if !hasCB(fm.allCallbackData(), "terms:accept") {
 		t.Fatalf("нет кнопки согласия: %v", fm.allCallbackData())
@@ -575,48 +575,6 @@ func TestLegal_FirstStartShowsOfferOnce(t *testing.T) {
 	}
 	if accepts != 0 {
 		t.Fatal("оферта показана повторно")
-	}
-}
-
-// Входная оферта строится из обоих документов-ссылок из конфига: соглашение
-// и политика с кликабельными ссылками, одна кнопка «Продолжить».
-func TestLegal_StartOfferShowsBothLinkDocs(t *testing.T) {
-	ctx := context.Background()
-	a, fm, _ := planAdminApp(t)
-	uid := int64(525)
-	a.botCfg.Legal = model.LegalConfig{
-		Terms:     model.LegalDoc{URL: "https://telegra.ph/Polzovatelskoe-soglashenie-09-23-41"},
-		Privacy:   model.LegalDoc{URL: "https://telegra.ph/Politika-konfidencialnosti-09-23-84"},
-		GateStart: true,
-	}
-
-	a.handleMessage(ctx, msgText(uid, "/start"))
-	last := fm.last()
-	for _, want := range []string{
-		"Продолжить",
-		"Пользовательское соглашение",
-		"https://telegra.ph/Polzovatelskoe-soglashenie-09-23-41",
-		"Политика конфиденциальности",
-		"https://telegra.ph/Politika-konfidencialnosti-09-23-84",
-	} {
-		if !strings.Contains(last, want) {
-			t.Fatalf("в оферте нет %q: %q", want, last)
-		}
-	}
-	if hasCB(fm.allCallbackData(), "terms:doc_terms") || hasCB(fm.allCallbackData(), "terms:decline") {
-		t.Fatalf("на входе только одна кнопка-continuation: %v", fm.allCallbackData())
-	}
-
-	// Оба документа видны и в «Помощи».
-	a.handleMessage(ctx, msgText(uid, "/start"))
-	a.handleCallback(ctx, cb(uid, "terms:accept"))
-	a.handleCallback(ctx, cb(uid, "menu:info"))
-	info := fm.last()
-	if !strings.Contains(info, "Помощь") {
-		t.Fatalf("«Помощь» не открылась: %q", info)
-	}
-	if !hasLabel(fm.buttonLabels(), "Пользовательское соглашение") || !hasLabel(fm.buttonLabels(), "Политика конфиденциальности") {
-		t.Fatalf("в «Помощи» нет обоих документов: %v", fm.buttonLabels())
 	}
 }
 
