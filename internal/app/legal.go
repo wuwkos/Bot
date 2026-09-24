@@ -307,18 +307,17 @@ func (a *App) askLegal(ctx context.Context, chatID int64) {
 		a.sendKB(ctx, chatID, i18n.T(lang, "cmd.terms_none"), [][]models.InlineKeyboardButton{homeRow(lang)})
 		return
 	}
-	// Вход в бота — короткая оферта в одну кнопку: новичок подтверждает
-	// согласие нажатием «Продолжить», полный разбор документов ему не нужен.
-	// Покупательский гейт и гейты VPN/триала показывают развёрнутый экран.
+	// Вход в бота — короткая оферта в одну кнопку: вводный текст + ссылки на
+	// настроенные документы (соглашение, политика). Покупательский гейт и
+	// гейты VPN/триала показывают развёрнутый экран.
 	if a.getUI(chatID).pendingLegalHome {
-		a.sendKB(ctx, chatID, i18n.T(lang, "legal.start_offer"), [][]models.InlineKeyboardButton{
+		a.sendKB(ctx, chatID, a.startOfferText(lang), [][]models.InlineKeyboardButton{
 			{btn(i18n.T(lang, "legal.btn_continue"), "terms:accept")},
 		})
 		return
 	}
 	body := i18n.T(lang, "legal.accept_intro")
-	var rows [][]models.InlineKeyboardButton
-	// Влезет ли всё одним сообщением, решаем по тексту, который реально уйдёт:
+	var rows [][]models.InlineKeyboardButton	// Влезет ли всё одним сообщением, решаем по тексту, который реально уйдёт:
 	// подстановка премиум-эмодзи оборачивает каждый значок в <tg-emoji …> и
 	// увеличивает длину в разы.
 	if full, ok := legalInline(lang, docs); ok && len([]rune(a.applyPremium(body+"\n\n"+full))) <= 4000 {
@@ -332,6 +331,26 @@ func (a *App) askLegal(ctx context.Context, chatID int64) {
 		[]models.InlineKeyboardButton{btn(i18n.T(lang, "terms.btn_decline"), "terms:decline")},
 	)
 	a.sendKB(ctx, chatID, body, rows)
+}
+
+// startOfferText — компактная оферта для входа из настроенных документов:
+// вводный текст + ссылки на соглашение (📜) и политику (🔒). Что не задано,
+// того в тексте нет.
+func (a *App) startOfferText(lang string) string {
+	var links []string
+	for _, it := range a.legalCfg().Docs() {
+		title := legalDocTitle(lang, it.Kind)
+		icon := "📜"
+		if it.Kind == model.LegalPrivacy {
+			icon = "🔒"
+		}
+		if it.Doc.URL != "" {
+			links = append(links, icon+" <a href=\""+html_(it.Doc.URL)+"\">"+title+"</a>")
+		} else if strings.TrimSpace(it.Doc.Text) != "" {
+			links = append(links, icon+" "+title)
+		}
+	}
+	return i18n.T(lang, "legal.start_offer", strings.Join(links, i18n.T(lang, "legal.and")))
 }
 
 // legalInline собирает все документы в одно сообщение. Не влезли — false, и

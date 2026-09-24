@@ -58,7 +58,6 @@ var userFacingSections = map[string]bool{
 	SectionMainMenu:        true,
 	SectionBuySubscription: true,
 	SectionMySubscription:  true,
-	SectionReferral:        true,
 }
 
 func UserSections() []Section {

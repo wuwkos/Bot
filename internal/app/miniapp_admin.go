@@ -96,24 +96,6 @@ func (a *App) toggleMiniApp(ctx context.Context, chatID int64) {
 	a.showMiniAppAdmin(ctx, chatID)
 }
 
-// trialWebAppRow возвращает кнопку триала, открывающую мини-апп, — десктопный
-// Telegram красит web_app-кнопки в акцентный (зелёный) цвет, а обычные
-// callback-кнопки оставляет серыми. Если мини-апп выключен или нет публичного
-// URL — nil, и вызывающий оставляет обычную кнопку menu:trial.
-func (a *App) trialWebAppRow(lang string) []models.InlineKeyboardButton {
-	a.mu.Lock()
-	on := a.botCfg != nil && a.botCfg.MiniApp.Enabled
-	a.mu.Unlock()
-	if !on {
-		return nil
-	}
-	url := a.miniAppURL()
-	if url == "" {
-		return nil
-	}
-	return []models.InlineKeyboardButton{{Text: i18n.T(lang, "vpn.btn_try"), WebApp: &models.WebAppInfo{URL: url}}}
-}
-
 // miniAppButtonRow returns a web_app launch button row for the Mini App, or nil
 // when the feature is disabled or no public URL is configured.
 func (a *App) miniAppButtonRow(lang string) []models.InlineKeyboardButton {

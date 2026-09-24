@@ -2397,6 +2397,28 @@ func TestVPNHub_WhitelistButton(t *testing.T) {
 	}
 }
 
+// Главное меню показывает строку способов оплаты из включённых в настройках;
+// когда ничего не включено — строки нет вообще.
+func TestUserMenu_PayMethods(t *testing.T) {
+	ctx := context.Background()
+	a, fm, _ := planAdminApp(t)
+	uid := int64(532)
+
+	a.botCfg.Stars.Enabled = true
+	a.botCfg.Platega.Enabled = true
+	a.showUserMenu(ctx, uid)
+	if menu := fm.last(); !strings.Contains(menu, "Telegram Stars") || !strings.Contains(menu, "плаtega") {
+		t.Fatalf("в меню нет включённых способов оплаты: %q", menu)
+	}
+
+	a.botCfg.Stars.Enabled = false
+	a.botCfg.Platega.Enabled = false
+	a.showUserMenu(ctx, uid)
+	if strings.Contains(fm.last(), "Способы оплаты") {
+		t.Fatalf("без включённых способов строки быть не должно: %q", fm.last())
+	}
+}
+
 // Панель недоступна: новичку без следа покупки показываем обычный вход
 // (триал/покупка), а не «не удалось проверить»; платившему — честный
 // статус-неизвестен без предложения купить.
