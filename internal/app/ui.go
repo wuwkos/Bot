@@ -322,6 +322,9 @@ func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 			status = i18n.T(lang, "ustatus.limited", formatExpire(expire, lang))
 		default:
 			status = i18n.T(lang, "ustatus.expired", formatExpire(expire, lang))
+			if plan := a.planDisplayName(ctx, chatID, lang); plan != "" {
+				status += i18n.T(lang, "ustatus.expired_plan", plan)
+			}
 		}
 	case subStUnknown:
 		status = i18n.T(lang, "ustatus.unknown")
@@ -337,13 +340,46 @@ func (a *App) showUserMenu(ctx context.Context, chatID int64) {
 	// ещё не настроен, чтобы не выглядеть мёртвой.
 	rows = append(rows, a.channelRow(lang))
 	rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.help"), "menu:info")})
+	// Админ в режиме «глазами юзера»: обратный выход в админку. Обычным
+	// юзерам строка не показывается, а нажатие посторонним ничего не даст
+	// (menu:manage — только для админа).
+	if a.isViewAsUser(chatID) {
+		a.mu.Lock()
+		adminID := int64(0)
+		if a.cfg != nil {
+			adminID = a.cfg.AdminID
+		}
+		a.mu.Unlock()
+		if chatID == adminID {
+			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "btn.backadmin"), "menu:manage")})
+		}
+	}
 	if row := a.miniAppButtonRow(lang); row != nil {
 		rows = append(rows, row)
 	}
 	if row := a.legalMenuRow(lang); row != nil {
 		rows = append(rows, row)
 	}
-	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", chatID, status)+a.payMethodsLine(lang), rows)
+	a.sendKBSection(ctx, chatID, assets.SectionMainMenu, i18n.T(lang, "umenu.title", status), rows)
+}
+
+// planDisplayName — название тарифа из снимка сделки (у триала — «Пробный
+// период»). Пусто, если взять неоткуда.
+func (a *App) planDisplayName(ctx context.Context, chatID int64, lang string) string {
+	if a.store == nil {
+		return ""
+	}
+	u, _ := a.store.GetUser(ctx, chatID)
+	if u == nil {
+		return ""
+	}
+	if u.NotifyKind == "trial" {
+		return i18n.T(lang, "vpn.plan_trial_name")
+	}
+	if u.Snapshot != nil && strings.TrimSpace(u.Snapshot.Name) != "" {
+		return strings.TrimSpace(u.Snapshot.Name)
+	}
+	return ""
 }
 
 // channelRow — кнопка «Наш канал»: ссылка из админки, а если канал не задан —
@@ -481,7 +517,6 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 			head += "\n\n" + i18n.T(lang, "vpn.dead_hint")
 			rows = [][]models.InlineKeyboardButton{
 				{btn(i18n.T(lang, "btn.renew"), "menu:renew")},
-				{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
 			}
 			if a.csqttEnabled() {
 				rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
@@ -489,9 +524,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 		}
 	case subStUnknown:
 		head = title + "\n" + i18n.T(lang, "vpn.status_unknown")
-		rows = [][]models.InlineKeyboardButton{
-			{btn(i18n.T(lang, "vpn.btn_connect"), "menu:mysubs")},
-		}
+		var rows [][]models.InlineKeyboardButton
 		if a.csqttEnabled() {
 			rows = append(rows, []models.InlineKeyboardButton{btn(i18n.T(lang, "vpn.btn_whitelist"), "menu:csqtt")})
 		}
@@ -513,7 +546,7 @@ func (a *App) showVPN(ctx context.Context, chatID int64) {
 	a.sendKBSection(ctx, chatID, assets.SectionMySubscription, head, rows)
 }
 
-// showInfo — экран «Помощь»: контакт поддержки и оферта ссылкой.
+// showInfo — экран «Помощь»: куда писать при проблеме (с ID юзера) и документы.
 func (a *App) showInfo(ctx context.Context, chatID int64) {
 	lang := a.lang(chatID)
 	a.mu.Lock()
@@ -522,11 +555,12 @@ func (a *App) showInfo(ctx context.Context, chatID int64) {
 		support = a.botCfg.Contact.SupportURL
 	}
 	a.mu.Unlock()
-	supportLine := i18n.T(lang, "info.no_support")
+	text := i18n.T(lang, "info.title")
 	if strings.TrimSpace(support) != "" {
-		supportLine = i18n.T(lang, "info.support", support)
+		text += "\n\n" + i18n.T(lang, "info.help_contact", support, chatID)
+	} else {
+		text += "\n\n" + i18n.T(lang, "info.no_support") + "\n" + i18n.T(lang, "info.your_id", chatID)
 	}
-	text := i18n.T(lang, "info.title") + "\n\n" + supportLine
 	var rows [][]models.InlineKeyboardButton
 	// Оба документа из конфига: текстовые открываются в боте, со ссылкой —
 	// ведут на страницу. Что не задано, того нет.
@@ -648,6 +682,7 @@ func (a *App) adminMenuRows(lang string) [][]models.InlineKeyboardButton {
 		{btn(i18n.T(lang, "menu.cat_pay"), "menu:pay"), btn(i18n.T(lang, "menu.cat_marketing"), "menu:marketing")},
 		{btn(i18n.T(lang, "menu.cat_iface"), "menu:iface"), btn(i18n.T(lang, "btn.users"), "menu:users")},
 		{btn(i18n.T(lang, "menu.cat_system"), "menu:system"), btn(i18n.T(lang, "btn.storefront"), "menu:buy")},
+		{btn(i18n.T(lang, "btn.viewuser"), "menu:viewuser")},
 	}
 }
 
@@ -817,13 +852,13 @@ func (a *App) showPay(ctx context.Context, chatID int64) {
 	internalCSV, externalName := a.squadDisplay(ctx)
 	title := i18n.T(lang, "subsetup.title",
 		mark(p2pOn), mark(starsOn), mark(ykOn), mark(cbOn), mark(plOn), mark(hlOn), mark(trbOn),
-		a.formatTrafficLimits(), a.formatDeviceLimits(lang), strat,
+		a.formatTrafficLimits(lang), a.formatDeviceLimits(lang), strat,
 		internalCSV, externalName,
 	)
 	if addsubOn {
 		traffic := i18n.T(lang, "addsub.unlimited")
 		if addsubGB > 0 {
-			traffic = strconv.Itoa(addsubGB) + " GB"
+			traffic = strconv.Itoa(addsubGB) + " " + i18n.T(lang, "units.gb")
 		}
 		title += i18n.T(lang, "subsetup.addsub_block", traffic, addsubInt)
 	}
@@ -1146,6 +1181,12 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 			a.showAccess(ctx, chatID)
 		}
 	case "home":
+		// Админ в режиме «глазами юзера» идёт домой как юзер, а не в админку:
+		// иначе «🏠 Главная» с любого экрана выбивала бы из режима просмотра.
+		if isAdmin && a.isViewAsUser(chatID) {
+			a.enterHome(ctx, chatID, isAdmin, firstName, username)
+			return
+		}
 		a.showMenu(ctx, chatID, isAdmin, name)
 	case "register":
 		a.registerUser(ctx, chatID, firstName, username)
@@ -1234,7 +1275,17 @@ func (a *App) onMenu(ctx context.Context, chatID int64, val string, isAdmin bool
 		}
 	case "manage":
 		if isAdmin {
+			// Возврат из режима «глазами юзера»: флаг снимаем здесь же, чтобы
+			// админка открывалась уже в обычном режиме.
+			a.setViewAsUser(chatID, false)
 			a.showMenu(ctx, chatID, true, name)
+		}
+	case "viewuser":
+		// Админ включает вид «глазами юзера»: дальше меню рисуется как у
+		// обычного пользователя. Права не меняются — только отображение.
+		if isAdmin {
+			a.setViewAsUser(chatID, true)
+			a.enterHome(ctx, chatID, isAdmin, firstName, username)
 		}
 	case "addsub":
 		if isAdmin {

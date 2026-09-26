@@ -84,12 +84,12 @@ func (a *App) showPlanSquads(ctx context.Context, chatID int64, mo int) {
 	a.sendPayKB(ctx, chatID, i18n.T(lang, "pricing.sq_title", mo, gIntCSV, gExtName, len(actInt), extState), rows)
 }
 
-func (a *App) formatTrafficLimits() string {
+func (a *App) formatTrafficLimits(lang string) string {
 	pr := a.pricing()
 	var parts []string
 	for _, mo := range model.PlanMonths {
 		if gb := pr.Traffic[mo]; gb > 0 {
-			parts = append(parts, strconv.Itoa(mo)+"м="+strconv.Itoa(gb)+"GB")
+			parts = append(parts, strconv.Itoa(mo)+"м="+strconv.Itoa(gb)+i18n.T(lang, "units.gb"))
 		}
 	}
 	if len(parts) == 0 {

@@ -32,7 +32,7 @@ func (a *App) showTrialAdmin(ctx context.Context, chatID int64) {
 	}
 	gbStr := i18n.T(lang, "trial.unlimited")
 	if gb > 0 {
-		gbStr = strconv.Itoa(gb) + " GB"
+		gbStr = strconv.Itoa(gb) + " " + i18n.T(lang, "units.gb")
 	}
 	hwidStr := i18n.T(lang, "pricing.hwid_default")
 	if hwid > 0 {

@@ -320,7 +320,7 @@ func (a *App) showPlanCard(ctx context.Context, chatID int64, code string) {
 func (a *App) planLimitsLine(lang string, p *model.Plan) string {
 	traffic := i18n.T(lang, "trial.unlimited")
 	if p.TrafficGB > 0 {
-		traffic = strconv.Itoa(p.TrafficGB) + " GB"
+		traffic = strconv.Itoa(p.TrafficGB) + " " + i18n.T(lang, "units.gb")
 	}
 	devices := i18n.T(lang, "pricing.hwid_default")
 	if p.DeviceLimit > 0 {

@@ -2397,25 +2397,21 @@ func TestVPNHub_WhitelistButton(t *testing.T) {
 	}
 }
 
-// Главное меню показывает строку способов оплаты из включённых в настройках;
-// когда ничего не включено — строки нет вообще.
+// Строка способов оплаты строится из включённых в настройках провайдеров;
+// когда ничего не включено — её нет вообще.
 func TestUserMenu_PayMethods(t *testing.T) {
-	ctx := context.Background()
-	a, fm, _ := planAdminApp(t)
-	uid := int64(532)
+	a, _, _ := planAdminApp(t)
 
 	a.botCfg.Stars.Enabled = true
 	a.botCfg.Platega.Enabled = true
-	a.showUserMenu(ctx, uid)
-	if menu := fm.last(); !strings.Contains(menu, "Telegram Stars") || !strings.Contains(menu, "плаtega") {
-		t.Fatalf("в меню нет включённых способов оплаты: %q", menu)
+	if got := a.payMethodsLine("ru"); !strings.Contains(got, "Telegram Stars") || !strings.Contains(got, "плаtega") {
+		t.Fatalf("в строке нет включённых способов оплаты: %q", got)
 	}
 
 	a.botCfg.Stars.Enabled = false
 	a.botCfg.Platega.Enabled = false
-	a.showUserMenu(ctx, uid)
-	if strings.Contains(fm.last(), "Способы оплаты") {
-		t.Fatalf("без включённых способов строки быть не должно: %q", fm.last())
+	if got := a.payMethodsLine("ru"); got != "" {
+		t.Fatalf("без включённых способов строки быть не должно: %q", got)
 	}
 }
 
@@ -2460,7 +2456,7 @@ func TestVPN_ExpiredSubNotActive(t *testing.T) {
 	before := len(fm.allCallbackData())
 	a.showVPN(ctx, user)
 	check("VPN")
-	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:renew|menu:mysubs|menu:home" {
+	if got := strings.Join(fm.allCallbackData()[before:], "|"); got != "menu:renew|menu:home" {
 		t.Fatalf("на истёкшей подписке первое действие — продление, получено %q", got)
 	}
 
@@ -2564,15 +2560,15 @@ func TestUserCommands(t *testing.T) {
 	a.botCfg = &model.BotConfig{Installed: true, Language: "ru"}
 	ctx := context.Background()
 
-	for _, text := range []string{"/vpn", "/menu", "/ref", "/info", "🚀 Подключить VPN", "🏠 Главное меню", "❓ Помощь", "👥 Пригласить друга", "ℹ️ Информация", "🏠 Главная"} {
+	for _, text := range []string{"/vpn", "/menu", "/ref", "/info", "🚀 Подключить VPN", "🏠 Главная", "❓ Помощь", "👥 Пригласить друга", "ℹ️ Информация", "🏠 Главное меню"} {
 		before := len(fm.texts)
 		a.handleMessage(ctx, msgText(555, text))
 		if len(fm.texts) <= before {
 			t.Errorf("команда/кнопка %q ничего не отрисовала", text)
 		}
 	}
-	if !strings.Contains(fm.joined(), "Ваш ID") {
-		t.Errorf("экран /menu должен показывать ID:\n%s", fm.joined())
+	if !strings.Contains(fm.joined(), "Главное меню") {
+		t.Errorf("экран /menu должен открываться:\n%s", fm.joined())
 	}
 }
 
@@ -3012,7 +3008,7 @@ func TestReplyKeyboard_AllButtonsRouted(t *testing.T) {
 		}
 	}
 	// Старые подписи из прошлых версий клавиатуры продолжают работать.
-	for _, old := range []string{"👥 Пригласить друга", "ℹ️ Информация"} {
+	for _, old := range []string{"👥 Пригласить друга", "ℹ️ Информация", "🏠 Главное меню", "🏠 Main menu"} {
 		if userCommandKey(old) == "" {
 			t.Fatalf("старая кнопка %q перестала разбираться", old)
 		}
@@ -3043,6 +3039,60 @@ func TestReplyTapMessageDeleted(t *testing.T) {
 		if !found {
 			t.Fatalf("тап %q не удалён: %v", text, fm.deleted)
 		}
+	}
+}
+
+// Админ переключается в «вид юзера» и обратно: меню меняется, права — нет.
+// Обычным юзерам кнопки «Вернуться в админку» не показываются вовсе.
+func TestAdminViewAsUser(t *testing.T) {
+	ctx := context.Background()
+	a, fm, fs := planAdminApp(t)
+	_ = fs.UpsertUser(ctx, 555)
+	_ = fs.UpsertUser(ctx, planAdmin)
+
+	// Обычному юзеру обратного выхода в админку нет.
+	a.showUserMenu(ctx, 555)
+	if hasLabel(fm.buttonLabels(), "Вернуться в админку") {
+		t.Fatal("у обычного юзера не должно быть кнопки возврата в админку")
+	}
+
+	// Админ без флага — админка с кнопкой переключения (структурно: баннеры
+	// fakeMsg не записывает кнопки, поэтому смотрим прямо в раскладку).
+	a.handleCallback(ctx, cb(planAdmin, "menu:home"))
+	if !strings.Contains(fm.last(), "Админ-панель") {
+		t.Fatalf("админ должен видеть админку: %q", fm.last())
+	}
+	foundView := false
+	for _, row := range a.adminMenuRows("ru") {
+		for _, b := range row {
+			if b.CallbackData == "menu:viewuser" {
+				foundView = true
+			}
+		}
+	}
+	if !foundView {
+		t.Fatal("в админке нет кнопки переключения в вид юзера")
+	}
+
+	// Включаем вид юзера: то же меню, что у обычного пользователя, плюс выход.
+	a.handleCallback(ctx, cb(planAdmin, "menu:viewuser"))
+	if !a.isViewAsUser(planAdmin) {
+		t.Fatal("флаг вида юзера не взвёлся")
+	}
+	if !strings.Contains(fm.last(), "Главное меню") {
+		t.Fatalf("админ в виде юзера должен видеть юзерское меню: %q", fm.last())
+	}
+	if !hasLabel(fm.buttonLabels(), "Вернуться в админку") {
+		t.Fatalf("нет кнопки возврата в админку: %v", fm.buttonLabels())
+	}
+
+	// Возврат: флаг снят, снова админка.
+	a.handleCallback(ctx, cb(planAdmin, "menu:manage"))
+	if a.isViewAsUser(planAdmin) {
+		t.Fatal("флаг вида юзера не снялся")
+	}
+	if !strings.Contains(fm.last(), "Админ-панель") {
+		t.Fatalf("после возврата должна быть админка: %q", fm.last())
 	}
 }
 

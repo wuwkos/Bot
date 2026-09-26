@@ -112,6 +112,11 @@ type App struct {
 	wiz          map[int64]*wizard
 	ui           map[int64]*uiState
 	updNoticeMsg map[int64]int
+	// viewUser — админ смотрит бота «глазами юзера» (переключатель в админке).
+	// Влияет ТОЛЬКО на отрисовку меню (enterHome/showMenu): все проверки прав
+	// идут по настоящему isAdmin и здесь не меняются. Сбрасывается
+	// перезапуском — безопасное значение по умолчанию (админка).
+	viewUser map[int64]bool
 
 	// reconSeen — последнее записанное в журнал состояние каждого висящего
 	// счёта. Реконсилятор опрашивает шлюзы раз в две минуты по каждому
@@ -1705,7 +1710,7 @@ func (a *App) cancelInput(ctx context.Context, chatID int64, isAdmin bool, fname
 func (a *App) enterHome(ctx context.Context, chatID int64, isAdmin bool, firstName, username string) {
 	name := displayName(firstName, username)
 	a.clearPanelInput(chatID)
-	if isAdmin {
+	if isAdmin && !a.isViewAsUser(chatID) {
 		a.showMenu(ctx, chatID, true, name)
 		return
 	}
@@ -1723,6 +1728,23 @@ func (a *App) enterHome(ctx context.Context, chatID int64, isAdmin bool, firstNa
 		return
 	}
 	a.showMenu(ctx, chatID, false, name)
+}
+
+// isViewAsUser / setViewAsUser — переключатель «админ смотрит как юзер».
+// Флаг живёт в памяти и виден только отрисовке меню; права не затрагивает.
+func (a *App) isViewAsUser(chatID int64) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.viewUser[chatID]
+}
+
+func (a *App) setViewAsUser(chatID int64, on bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.viewUser == nil {
+		a.viewUser = map[int64]bool{}
+	}
+	a.viewUser[chatID] = on
 }
 
 func isHomeText(text string) bool {
@@ -1758,6 +1780,8 @@ func userCommandKey(text string) string {
 			return "info"
 		// Старые подписи клавиатуры: клиенты держат reply-набор у себя, и
 		// кнопка из прошлой версии бота должна продолжать работать.
+		case "🏠 Главное меню", "🏠 Main menu":
+			return "menu"
 		case i18n.T(lang, "rk.ref"):
 			return "ref"
 		case i18n.T(lang, "rk.info"):

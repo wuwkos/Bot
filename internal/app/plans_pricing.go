@@ -127,7 +127,7 @@ func (a *App) showPlanMonth(ctx context.Context, chatID int64, code string, mo i
 	if d != nil {
 		base, p2p, yk, stars = d.Base, d.P2P, d.YooKassa, d.Stars
 		if d.TrafficGB != nil {
-			traffic = strconv.Itoa(*d.TrafficGB) + " GB"
+			traffic = strconv.Itoa(*d.TrafficGB) + " " + i18n.T(lang, "units.gb")
 			if *d.TrafficGB == 0 {
 				traffic = i18n.T(lang, "trial.unlimited")
 			}

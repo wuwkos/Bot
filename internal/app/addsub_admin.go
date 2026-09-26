@@ -31,7 +31,7 @@ func (a *App) showAddSubAdmin(ctx context.Context, chatID int64) {
 	}
 	traffic := i18n.T(lang, "addsub.unlimited")
 	if c.TrafficGB > 0 {
-		traffic = strconv.Itoa(c.TrafficGB) + " GB"
+		traffic = strconv.Itoa(c.TrafficGB) + " " + i18n.T(lang, "units.gb")
 	}
 	toggleLabel := i18n.T(lang, "addsub.btn_enable")
 	if c.Enabled {
