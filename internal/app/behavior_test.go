@@ -131,6 +131,25 @@ func (f *fakeMsg) SendKB(_ context.Context, _ int64, text string, rows [][]model
 	}
 	return id
 }
+
+// SendReplyText — текст с reply-клавиатурой: записываем текст и кнопки, как у
+// SendKB, но кнопки reply (плоский список подписей).
+func (f *fakeMsg) SendReplyText(_ context.Context, _ int64, text string, rkb models.ReplyKeyboardMarkup) int {
+	f.mu.Lock()
+	for _, row := range rkb.Keyboard {
+		for _, b := range row {
+			if b.Text != "" {
+				f.btnText = append(f.btnText, b.Text)
+			}
+		}
+	}
+	f.mu.Unlock()
+	id := f.add(text)
+	if f.kbFail {
+		return 0
+	}
+	return id
+}
 func (f *fakeMsg) SendEnt(_ context.Context, _ int64, text string, _ []models.MessageEntity, _ [][]models.InlineKeyboardButton) int {
 	return f.add(text)
 }
@@ -2512,6 +2531,22 @@ func TestServiceName_Branding(t *testing.T) {
 	a.handleMessage(ctx, msgText(planAdmin, "-"))
 	if a.botCfg.ServiceName != "" {
 		t.Fatalf("«-» не сбросил название: %q", a.botCfg.ServiceName)
+	}
+}
+
+// Текстовый фолбэк приветствия (картинки не ушли) тоже несёт reply-кнопки:
+// иначе новичок оставался бы вообще без меню.
+func TestGreetingTextFallbackHasReplyButtons(t *testing.T) {
+	ctx := context.Background()
+	a, fm, _ := planAdminApp(t)
+	fm.failAllBanners = true
+
+	a.showGreeting(ctx, 777, "Тест")
+	if !hasLabel(fm.buttonLabels(), "Подключить VPN") {
+		t.Fatalf("текстовый фолбэк приветствия без reply-кнопок: %v", fm.buttonLabels())
+	}
+	if !strings.Contains(fm.last(), "Привет") {
+		t.Fatalf("текст приветствия потерян: %q", fm.last())
 	}
 }
 

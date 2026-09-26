@@ -738,9 +738,13 @@ func (a *App) submitP2PReceipt(ctx context.Context, m *models.Message, fileID st
 	ui.p2pShotMsgID = m.ID
 
 	lang := a.lang(chatID)
-	ui.p2pSubmitMsgID = a.msg.SendKB(ctx, chatID,
-		a.applyPremium(i18n.T(lang, "p2p.submitted")),
-		[][]models.InlineKeyboardButton{backHomeRow(lang)})
+	// Подтверждение — обычный экран: заменяет предыдущий, id запоминаем, чтобы
+	// админское решение потом сняло именно его.
+	ui.p2pSubmitMsgID = a.emit(ctx, chatID, func() int {
+		return a.msg.SendKB(ctx, chatID,
+			a.applyPremium(i18n.T(lang, "p2p.submitted")),
+			[][]models.InlineKeyboardButton{backHomeRow(lang)})
+	})
 	a.notifyAdminPayment(ctx, req, fileID, asDoc)
 }
 

@@ -401,9 +401,10 @@ func liveHas(fm *fakeMsg, sub string) bool {
 	return false
 }
 
-// Открытие длинного документа не должно убивать экран согласия: части уходят
-// обычными сообщениями, а не «экраном» (тот удаляет предыдущий).
-func TestLegal_DocDoesNotEatConsentScreen(t *testing.T) {
+// Открытие документа заменяет экран согласия (в чате всегда одно сообщение):
+// прочитать можно, а вернуться — через «На главную» (гейт вернёт к согласию,
+// пока оно не принято).
+func TestLegal_DocReplacesConsentScreen(t *testing.T) {
 	ctx := context.Background()
 	a, fm, fs := planAdminApp(t)
 	uid := int64(510)
@@ -413,11 +414,14 @@ func TestLegal_DocDoesNotEatConsentScreen(t *testing.T) {
 
 	a.askLegal(ctx, uid)
 	a.handleCallback(ctx, cb(uid, "terms:doc_terms"))
-	if !liveHas(fm, "Документы сервиса") {
-		t.Fatal("экран согласия пропал при открытии документа")
+	if liveHas(fm, "Документы сервиса") {
+		t.Fatal("экран согласия должен уступить место документу")
 	}
 	if !liveHas(fm, "строка документа") {
 		t.Fatal("части документа не дошли")
+	}
+	if !hasCB(fm.allCallbackData(), "menu:home") {
+		t.Fatal("нет кнопки возврата с документа")
 	}
 }
 

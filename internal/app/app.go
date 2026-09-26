@@ -40,6 +40,9 @@ type messenger interface {
 	// такие адресаты тратят по два обращения на каждую рассылку вечно.
 	SendErr(ctx context.Context, chatID int64, text string) (int, error)
 	SendKB(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton) int
+	// SendReplyText — текст с reply-клавиатурой (для фолбэка приветствия,
+	// когда не уходят картинки). Возвращает id, 0 — не доставлено.
+	SendReplyText(ctx context.Context, chatID int64, text string, rkb models.ReplyKeyboardMarkup) int
 	// SendEnt отправляет текст с телеграмными entities (форматирование 1-в-1,
 	// без ParseMode) — для сообщений, набранных админом в клиенте Telegram.
 	SendEnt(ctx context.Context, chatID int64, text string, entities []models.MessageEntity, rows [][]models.InlineKeyboardButton) int
@@ -169,6 +172,9 @@ type App struct {
 	screen        map[int64][]int
 	editTarget    map[int64]int
 	screenSection map[int64]string
+	// greetMsg — последнее приветствие чата (носитель reply-клавиатуры).
+	// Приветствий в чате всегда не больше одного: новое снимает старое.
+	greetMsg map[int64]int
 
 	subMu    sync.Mutex
 	subCache map[int64]subCacheEntry
@@ -1301,14 +1307,14 @@ func (a *App) getScreenSection(chatID int64) string {
 
 // tryEditScreen edits the message the user acted on (callback source) in place
 // instead of delete+resend. Text screens only; on a photo message or any error
-// it returns false and the caller falls back to the normal delete+send flow.
-func (a *App) tryEditScreen(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton) bool {
+// it returns 0 and the caller falls back to the normal delete+send flow.
+func (a *App) tryEditScreen(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton) int {
 	target := a.takeEditTarget(chatID)
 	if target == 0 {
-		return false
+		return 0
 	}
 	if !a.msg.EditText(ctx, chatID, target, text, rows) {
-		return false
+		return 0
 	}
 	a.scrMu.Lock()
 	old := a.screen[chatID]
@@ -1322,10 +1328,10 @@ func (a *App) tryEditScreen(ctx context.Context, chatID int64, text string, rows
 	if a.store != nil {
 		_ = a.store.SetScreenMsg(ctx, chatID, target)
 	}
-	return true
+	return target
 }
 
-func (a *App) emit(ctx context.Context, chatID int64, send func() int) {
+func (a *App) emit(ctx context.Context, chatID int64, send func() int) int {
 	a.takeEditTarget(chatID)
 	a.setScreenSection(chatID, "")
 	a.scrMu.Lock()
@@ -1355,6 +1361,7 @@ func (a *App) emit(ctx context.Context, chatID int64, send func() int) {
 			_ = a.store.SetScreenMsg(ctx, chatID, id)
 		}
 	}
+	return id
 }
 
 func (a *App) screenMsgID(chatID int64) int {
@@ -1378,7 +1385,7 @@ func (a *App) sendHome(ctx context.Context, chatID int64, text string) {
 func (a *App) sendKB(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton) {
 	t := a.applyPremium(text)
 	a.setScreenSection(chatID, "")
-	if a.tryEditScreen(ctx, chatID, t, rows) {
+	if a.tryEditScreen(ctx, chatID, t, rows) != 0 {
 		return
 	}
 	a.emit(ctx, chatID, func() int { return a.msg.SendKB(ctx, chatID, t, rows) })
@@ -1436,9 +1443,9 @@ func (a *App) sendBanner(ctx context.Context, chatID int64, photo models.InputFi
 // sendBannerKeep — баннер, который НЕ считается «экраном» и не удаляется при
 // навигации. Им служит приветствие: оно несёт reply-клавиатуру, а некоторые
 // клиенты прячут кнопки вместе с удалённым сообщением-носителем — удалить
-// приветствие значит снять reply-кнопки.
-func (a *App) sendBannerKeep(ctx context.Context, chatID int64, photo models.InputFile, caption string, ents []models.MessageEntity, rm models.ReplyMarkup) {
-	a.sendBannerImpl(ctx, chatID, photo, caption, ents, rm)
+// приветствие значит снять reply-кнопки. Возвращает id отправленного.
+func (a *App) sendBannerKeep(ctx context.Context, chatID int64, photo models.InputFile, caption string, ents []models.MessageEntity, rm models.ReplyMarkup) int {
+	return a.sendBannerImpl(ctx, chatID, photo, caption, ents, rm)
 }
 
 // sendBannerImpl — сама отправка баннера с фолбэками на битую картинку и на
@@ -1458,7 +1465,11 @@ func (a *App) sendBannerImpl(ctx context.Context, chatID int64, photo models.Inp
 		return id
 	}
 	// Не принялась и картинка по умолчанию (например, подпись длиннее
-	// лимита) — экран уходит текстом: кнопки важнее оформления.
+	// лимита) — экран уходит текстом: кнопки важнее оформления. Reply-разметку
+	// (клавиатура приветствия) несём текстом напрямую, а не теряем.
+	if rkb, ok := rm.(models.ReplyKeyboardMarkup); ok {
+		return a.msg.SendReplyText(ctx, chatID, caption, rkb)
+	}
 	rows := [][]models.InlineKeyboardButton(nil)
 	if kb, ok := rm.(models.InlineKeyboardMarkup); ok {
 		rows = kb.InlineKeyboard
@@ -1611,27 +1622,43 @@ func (a *App) sendKBSection(ctx context.Context, chatID int64, section, caption 
 }
 
 func (a *App) notify(ctx context.Context, chatID int64, text string) {
-	a.msg.SendKB(ctx, chatID, a.applyPremium(text), [][]models.InlineKeyboardButton{backHomeRow(a.lang(chatID))})
+	t := a.applyPremium(text)
+	rows := [][]models.InlineKeyboardButton{backHomeRow(a.lang(chatID))}
+	a.setScreenSection(chatID, "")
+	if a.tryEditScreen(ctx, chatID, t, rows) != 0 {
+		return
+	}
+	a.emit(ctx, chatID, func() int { return a.msg.SendKB(ctx, chatID, t, rows) })
 }
 
 // notifyKB возвращает id отправленного сообщения; 0 — доставить не удалось.
 // Вызывающему это важно там, где факт доставки что-то закрывает (окно
-// напоминания).
+// напоминания). Идёт через общий конвейер экранов: уведомление ЗАМЕНЯЕТ
+// текущий экран, а не висит вторым сообщением.
 func (a *App) notifyKB(ctx context.Context, chatID int64, text string, rows [][]models.InlineKeyboardButton) int {
 	withClose := append(append([][]models.InlineKeyboardButton{}, rows...), backHomeRow(a.lang(chatID)))
-	return a.msg.SendKB(ctx, chatID, a.applyPremium(text), withClose)
+	t := a.applyPremium(text)
+	a.setScreenSection(chatID, "")
+	if id := a.tryEditScreen(ctx, chatID, t, withClose); id != 0 {
+		return id
+	}
+	return a.emit(ctx, chatID, func() int { return a.msg.SendKB(ctx, chatID, t, withClose) })
 }
 
 func (a *App) notifyPhoto(ctx context.Context, chatID int64, fileID, caption string, rows [][]models.InlineKeyboardButton) {
 	withClose := append(append([][]models.InlineKeyboardButton{}, rows...), backHomeRow(a.lang(chatID)))
-	a.msg.SendPhoto(ctx, chatID, fileID, a.applyPremium(caption), withClose)
+	a.emit(ctx, chatID, func() int {
+		return a.msg.SendPhoto(ctx, chatID, fileID, a.applyPremium(caption), withClose)
+	})
 }
 
 // notifyDoc — то же, что notifyPhoto, но для чека, пришедшего файлом (PDF или
 // картинка «без сжатия»): такие Telegram отдаёт только как документ.
 func (a *App) notifyDoc(ctx context.Context, chatID int64, doc models.InputFile, caption string, rows [][]models.InlineKeyboardButton) {
 	withClose := append(append([][]models.InlineKeyboardButton{}, rows...), backHomeRow(a.lang(chatID)))
-	a.msg.SendDocumentKB(ctx, chatID, doc, a.applyPremium(caption), &models.InlineKeyboardMarkup{InlineKeyboard: withClose})
+	a.emit(ctx, chatID, func() int {
+		return a.msg.SendDocumentKB(ctx, chatID, doc, a.applyPremium(caption), &models.InlineKeyboardMarkup{InlineKeyboard: withClose})
+	})
 }
 
 func backHomeRow(lang string) []models.InlineKeyboardButton {
@@ -1880,6 +1907,22 @@ type botMessenger struct {
 
 func (m botMessenger) Send(ctx context.Context, chatID int64, text string) int {
 	return m.SendKB(ctx, chatID, text, nil)
+}
+
+func (m botMessenger) SendReplyText(ctx context.Context, chatID int64, text string, rkb models.ReplyKeyboardMarkup) int {
+	var msg *models.Message
+	err := m.sendWithRetry(ctx, func() (e error) {
+		msg, e = m.b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text, ReplyMarkup: rkb})
+		return e
+	})
+	if err != nil {
+		m.log.Error("send reply text", "err", err)
+		return 0
+	}
+	if msg == nil {
+		return 0
+	}
+	return msg.ID
 }
 
 func (m botMessenger) SendErr(ctx context.Context, chatID int64, text string) (int, error) {

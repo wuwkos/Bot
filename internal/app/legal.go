@@ -391,6 +391,8 @@ func (a *App) showLegalDocs(ctx context.Context, chatID int64) {
 }
 
 // showLegalDoc — один документ сообщением (при необходимости несколькими).
+// Части идут как один экран (sendKBParts): открытие документа заменяет экран
+// согласия, а не висит рядом с ним — вернуться можно через «На главную».
 func (a *App) showLegalDoc(ctx context.Context, chatID int64, kind string) {
 	lang := a.lang(chatID)
 	for _, it := range a.legalCfg().Docs() {
@@ -398,16 +400,7 @@ func (a *App) showLegalDoc(ctx context.Context, chatID int64, kind string) {
 			continue
 		}
 		parts := legalDocParts(lang, it)
-		for i, part := range parts {
-			// Части уходят обычными сообщениями, а не экраном: экран удаляет
-			// предыдущий, и документ съедал бы сам себя вместе с экраном
-			// согласия, с которого его открыли.
-			if i == len(parts)-1 {
-				a.msg.SendKB(ctx, chatID, part, [][]models.InlineKeyboardButton{backHomeRow(lang)})
-				return
-			}
-			a.msg.Send(ctx, chatID, part)
-		}
+		a.sendKBParts(ctx, chatID, parts, [][]models.InlineKeyboardButton{backHomeRow(lang)})
 		return
 	}
 	a.notify(ctx, chatID, i18n.T(lang, "cmd.terms_none"))

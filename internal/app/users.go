@@ -718,7 +718,7 @@ func (a *App) notifyBlockState(ctx context.Context, uid int64, mode string) {
 	if mode == "blockboth" {
 		key = "block.user_both"
 	}
-	a.msg.SendKB(ctx, uid, a.applyPremium(i18n.T(ulang, key)), nil)
+	a.sendKB(ctx, uid, i18n.T(ulang, key), nil)
 }
 
 func (a *App) notifyUnblockState(ctx context.Context, uid int64, mode string) {

@@ -300,7 +300,21 @@ func subDaysLeft(expireAt string) int {
 func (a *App) showGreeting(ctx context.Context, chatID int64, name string) {
 	photo, caption, ents := a.welcomeContent(name)
 	lang := a.lang(chatID)
-	a.sendBannerKeep(ctx, chatID, photo, caption, ents, userReplyMarkup(lang))
+	// Сначала шлём новое приветствие (оно несёт reply-клавиатуру), и только
+	// потом снимаем старое: в промежутке кнопки не должны пропадать.
+	id := a.sendBannerKeep(ctx, chatID, photo, caption, ents, userReplyMarkup(lang))
+	if id != 0 {
+		a.scrMu.Lock()
+		old := a.greetMsg[chatID]
+		if a.greetMsg == nil {
+			a.greetMsg = map[int64]int{}
+		}
+		a.greetMsg[chatID] = id
+		a.scrMu.Unlock()
+		if old != 0 && old != id {
+			a.msg.Delete(ctx, chatID, old)
+		}
+	}
 }
 
 // showUserMenu — экран /menu: ID, статус подписки, кнопки разделов.
